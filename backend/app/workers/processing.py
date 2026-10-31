@@ -1,4 +1,3 @@
-import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +17,47 @@ from app.models.entities import (
     Severity,
 )
 from app.services.review_engine import ReviewEngine, ReviewEngineError
+
+SAFE_ERROR_CODES = frozenset(
+    {
+        "github_app_not_configured",
+        "github_private_key_unavailable",
+        "github_private_key_invalid",
+        "invalid_installation_id",
+        "github_token_response_invalid",
+        "github_network_error",
+        "github_rate_limited",
+        "github_unavailable",
+        "github_response_too_large",
+        "github_diff_response_too_large",
+        "github_files_response_invalid",
+        "github_permission_denied",
+        "github_request_failed",
+        "invalid_pull_request_reference",
+        "invalid_review_reference",
+        "github_review_failed",
+        "llm_review_failed",
+        "llm_invalid_output",
+        "openai_not_configured",
+        "source_upload_not_opted_in",
+        "openai_empty_structured_output",
+        "openai_invalid_structured_output",
+        "openai_apitimeouterror",
+        "openai_apiconnectionerror",
+        "openai_connectionerror",
+        "openai_internalservererror",
+        "openai_ratelimiterror",
+        "openai_serviceunavailableerror",
+        "openai_authenticationerror",
+        "openai_badrequesterror",
+        "openai_permissiondeniederror",
+        "openai_apierror",
+        "review_engine_failed",
+        "review_context_missing",
+        "pull_request_not_found",
+        "worker_internal_error",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -50,9 +90,9 @@ def is_retryable_code(code: str) -> bool:
 
 
 def sanitized_error_code(value: object, default: str) -> str:
-    if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,100}", value):
+    if isinstance(value, str) and value in SAFE_ERROR_CODES:
         return value
-    return default
+    return default if default in SAFE_ERROR_CODES else "worker_internal_error"
 
 
 async def _close_engine(engine: ReviewEngine | None) -> None:

@@ -201,6 +201,22 @@ async def test_transient_review_failure_resets_to_queued_then_terminal_failure_i
 
 
 @pytest.mark.asyncio
+async def test_worker_persists_only_allowlisted_error_codes(database):
+    review_id, _ = await queued_review(database)
+    engine = FakeReviewEngine(failure=ReviewEngineError("secret_value_123"))
+
+    result = await run_review_task_async(
+        str(review_id), sessions=database, engine_factory=lambda: engine
+    )
+
+    assert result == {"status": "failed", "error_code": "review_engine_failed"}
+    async with database() as session:
+        review = await session.get(Review, review_id)
+        assert review.error_code == "review_engine_failed"
+        assert "secret" not in review.error_code
+
+
+@pytest.mark.asyncio
 async def test_broker_failure_is_recoverable_and_success_is_not_immediately_republished(
     database, monkeypatch
 ):

@@ -2,10 +2,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
+    Finding,
     Installation,
     PullRequest,
     Repository,
@@ -143,6 +144,7 @@ async def ingest_delivery(
     revived = review.status == ReviewStatus.superseded
     if revived:
         # A force-push can return to a previously reviewed SHA; reuse its unique row safely.
+        await session.execute(delete(Finding).where(Finding.review_id == review.id))
         review.status = ReviewStatus.queued
         review.started_at = None
         review.completed_at = None

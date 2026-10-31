@@ -1,6 +1,6 @@
 # ReviewPilot
 
-ReviewPilot is a local, advisory GitHub pull request review dashboard. Milestones 1 and 2 deliver the API foundation, authenticated webhook ingestion, and an injectable review engine. The review worker and dashboard are not implemented yet.
+ReviewPilot is a local, advisory GitHub pull request review dashboard. Milestones 1–3 deliver signed webhook ingestion, an injectable review engine, an asynchronous worker with recovery, and local-only read/feedback APIs. The dashboard is not implemented yet.
 
 ## Requirements
 
@@ -25,11 +25,20 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 The API listens on localhost. `GET http://127.0.0.1:8000/health` is a liveness check. Webhook requests go to `POST /api/webhooks/github`. OpenAPI docs are available at `/docs` during development. To run the tests, execute `python -m pytest` from `backend`.
 
+In separate terminals from `backend`, start the worker and queue reconciler:
+
+```powershell
+celery -A app.workers.celery_app:celery_app worker --loglevel=info
+celery -A app.workers.celery_app:celery_app beat --loglevel=info
+```
+
+The webhook transaction stores one queued review per PR commit and a durable outbox record. The API attempts to enqueue after commit; the periodic Beat task retries queued work and recovers abandoned worker leases. Worker replays are idempotent. A stale commit is marked superseded.
+
 ## GitHub App setup
 
 Create a GitHub App for the test account or organization. Grant **Repository metadata: Read-only**, **Pull requests: Read-only**, and **Contents: Read-only**. Subscribe to `pull_request`. Do not grant write permissions. Set the webhook URL to the HTTPS tunnel URL ending in `/api/webhooks/github`; configure a random webhook secret and put it in `GITHUB_WEBHOOK_SECRET` in `.env`. Keep the app private key path and all credentials server-side. Never commit `.env` or private keys.
 
-Supported actions are `opened`, `reopened`, and `synchronize`. The backend verifies `X-Hub-Signature-256` over the raw request body before parsing it. `X-GitHub-Delivery` is the idempotency key. Duplicate deliveries are acknowledged without repeating writes; other event types and PR actions are recorded and ignored. No review job is enqueued in this milestone.
+Supported actions are `opened`, `reopened`, and `synchronize`. The backend verifies `X-Hub-Signature-256` over the raw request body before parsing it. `X-GitHub-Delivery` is the idempotency key. Duplicate deliveries are acknowledged without repeating writes; other event types and PR actions are recorded and ignored. Accepted events enqueue review work without calling the LLM in the webhook handler.
 
 ## Local data services
 
@@ -37,7 +46,7 @@ Postgres and Redis run on loopback ports 5432 and 6379. Postgres state is held i
 
 ## Security boundary
 
-This MVP has no dashboard authentication. Keep the backend bound to localhost and do not deploy it publicly. Private PR metadata is stored in PostgreSQL. See [docs/implementation-status.md](docs/implementation-status.md) for milestone scope and remaining work.
+This MVP has no dashboard authentication. Keep the backend bound to localhost and do not deploy it publicly. Non-webhook `/api` endpoints also reject non-loopback clients; the signed webhook endpoint remains available through the configured tunnel. Private PR metadata and findings are stored in PostgreSQL. See [docs/implementation-status.md](docs/implementation-status.md) for milestone scope and remaining work.
 
 ## Milestone 2 review engine
 

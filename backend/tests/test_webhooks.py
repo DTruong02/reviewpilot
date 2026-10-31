@@ -13,7 +13,16 @@ from app.api.routes import webhooks
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models.entities import Installation, PullRequest, Review, ReviewOutbox, WebhookDelivery
+from app.models.entities import (
+    Category,
+    Finding,
+    Installation,
+    PullRequest,
+    Review,
+    ReviewOutbox,
+    Severity,
+    WebhookDelivery,
+)
 
 SECRET = "test-webhook-secret"
 SHA1 = "a" * 40
@@ -158,6 +167,48 @@ async def test_new_delivery_updates_pull_request_head_and_title(client):
         assert sum(review.status.value == "queued" for review in reviews) == 1
         assert sum(review.status.value == "superseded" for review in reviews) == 1
     assert len(dispatched) == 2
+
+
+@pytest.mark.asyncio
+async def test_reopened_head_clears_findings_from_superseded_review(client):
+    api, sessions, _ = client
+    first = await send(api, json.dumps(payload(SHA1)).encode(), str(uuid.uuid4()))
+    assert first.status_code == 202
+    async with sessions() as session:
+        review = await session.scalar(select(Review))
+        session.add(
+            Finding(
+                review_id=review.id,
+                file_path="src/example.py",
+                line_number=1,
+                severity=Severity.high,
+                category=Category.bug,
+                title="Old finding",
+                explanation="This belongs to the old completed result.",
+            )
+        )
+        await session.commit()
+
+    second = await send(
+        api,
+        json.dumps(payload(SHA2, action="synchronize")).encode(),
+        str(uuid.uuid4()),
+    )
+    third = await send(
+        api,
+        json.dumps(payload(SHA1, action="synchronize")).encode(),
+        str(uuid.uuid4()),
+    )
+    assert second.status_code == third.status_code == 202
+    async with sessions() as session:
+        old_review = await session.scalar(select(Review).where(Review.commit_sha == SHA1))
+        assert old_review.status == "queued"
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(Finding).where(Finding.review_id == old_review.id)
+            )
+            == 0
+        )
 
 
 @pytest.mark.asyncio

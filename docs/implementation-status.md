@@ -60,7 +60,7 @@ After integration review, the combined Milestone 1–3 suite passes 42 tests. Ru
 - [x] Add frontend component tests and startup/source-upload privacy guidance.
 - [ ] Manually verify the browser flow against live local Postgres/Redis and webhook-created review data.
 
-The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and a production build in its isolated worktree. Root review fixed FastAPI structured error handling and added recent pull request/review summary content to the dashboard. The final integrated frontend checks still need a fresh dependency install in the primary worktree.
+The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and a production build in its isolated worktree. Root review fixed FastAPI structured error handling and added recent pull request/review summary content to the dashboard, with an added structured-error regression test. The final integrated frontend checks still need a fresh dependency install in the primary worktree.
 
 ## Milestone 5 — Quality, evaluation, and deployment readiness
 

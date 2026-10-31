@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import verify_github_signature
 from app.db.session import get_session
 from app.services.webhook_ingestion import ingest_delivery
+from app.workers.queue import dispatch_queued_review
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -62,9 +63,7 @@ async def github_webhook(
         ) from None
 
     try:
-        duplicate, accepted = await ingest_delivery(
-            session, x_github_delivery, x_github_event, payload
-        )
+        result = await ingest_delivery(session, x_github_delivery, x_github_event, payload)
     except ValidationError:
         await session.rollback()
         raise HTTPException(
@@ -95,5 +94,14 @@ async def github_webhook(
                 detail={"code": "ingestion_conflict", "message": "Webhook could not be persisted."},
             ) from None
         accepted = False
+        result = None
+    if result is not None:
+        duplicate, accepted = result.duplicate, result.accepted
+        if result.review_id is not None:
+            # The DB/outbox commit has already happened; a broker error is recovered by beat.
+            try:
+                await dispatch_queued_review(session, result.review_id)
+            except Exception:
+                pass
     response.headers["X-ReviewPilot-Duplicate"] = str(duplicate).lower()
     return {"received": True, "duplicate": duplicate, "accepted": accepted}

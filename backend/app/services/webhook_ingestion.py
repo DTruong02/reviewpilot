@@ -1,21 +1,40 @@
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import Installation, PullRequest, Repository, WebhookDelivery
+from app.models.entities import (
+    Installation,
+    PullRequest,
+    Repository,
+    Review,
+    ReviewOutbox,
+    ReviewStatus,
+    WebhookDelivery,
+)
 from app.schemas.webhook import PullRequestEvent
 
 SUPPORTED_ACTIONS = {"opened", "reopened", "synchronize"}
 
 
+@dataclass(frozen=True)
+class IngestionResult:
+    duplicate: bool
+    accepted: bool
+    review_id: uuid.UUID | None = None
+
+
 async def ingest_delivery(
     session: AsyncSession, delivery_id: str, event_type: str, payload: dict
-) -> tuple[bool, bool]:
-    """Persist a delivery and its PR metadata atomically. Returns (duplicate, accepted)."""
+) -> IngestionResult:
+    """Atomically persist delivery, metadata, a queued review, and its outbox row."""
     existing = await session.scalar(
         select(WebhookDelivery.id).where(WebhookDelivery.github_delivery_id == delivery_id)
     )
     if existing:
-        return True, False
+        return IngestionResult(duplicate=True, accepted=False)
 
     action = payload.get("action") if isinstance(payload, dict) else None
     delivery = WebhookDelivery(
@@ -29,7 +48,7 @@ async def ingest_delivery(
     if event_type != "pull_request" or action not in SUPPORTED_ACTIONS:
         delivery.processing_status = "processed"
         await session.commit()
-        return False, False
+        return IngestionResult(duplicate=False, accepted=False)
 
     event = PullRequestEvent.model_validate(payload)
     owner, name = event.repository.full_name.split("/", maxsplit=1)
@@ -88,6 +107,60 @@ async def ingest_delivery(
         pull_request.head_sha = event.pull_request.head.sha
         pull_request.html_url = event.pull_request.html_url
 
+    # Changing the head makes all prior-commit results non-current, including queued work.
+    stale_reviews = list(
+        (
+            await session.scalars(
+                select(Review).where(
+                    Review.pull_request_id == pull_request.id,
+                    Review.commit_sha != event.pull_request.head.sha,
+                    Review.status.in_(
+                        [ReviewStatus.queued, ReviewStatus.running, ReviewStatus.completed]
+                    ),
+                )
+            )
+        ).all()
+    )
+    for stale_review in stale_reviews:
+        stale_review.status = ReviewStatus.superseded
+        stale_review.processing_token = None
+        stale_review.completed_at = stale_review.completed_at or datetime.now(UTC)
+
+    review = await session.scalar(
+        select(Review).where(
+            Review.pull_request_id == pull_request.id,
+            Review.commit_sha == event.pull_request.head.sha,
+        )
+    )
+    if review is None:
+        review = Review(
+            pull_request_id=pull_request.id,
+            commit_sha=event.pull_request.head.sha,
+            status=ReviewStatus.queued,
+        )
+        session.add(review)
+        await session.flush()
+    revived = review.status == ReviewStatus.superseded
+    if revived:
+        # A force-push can return to a previously reviewed SHA; reuse its unique row safely.
+        review.status = ReviewStatus.queued
+        review.started_at = None
+        review.completed_at = None
+        review.error_code = None
+        review.processing_token = None
+
+    review_id = review.id if review.status == ReviewStatus.queued else None
+    if review_id is not None:
+        outbox = await session.scalar(
+            select(ReviewOutbox).where(ReviewOutbox.review_id == review_id)
+        )
+        if outbox is None:
+            session.add(ReviewOutbox(review_id=review_id))
+        elif revived:
+            outbox.enqueue_attempts = 0
+            outbox.last_enqueued_at = None
+            outbox.last_error_code = None
+
     delivery.processing_status = "processed"
     await session.commit()
-    return False, True
+    return IngestionResult(duplicate=False, accepted=True, review_id=review_id)

@@ -1,0 +1,7 @@
+diff --git a/src/tasks.py b/src/tasks.py
+--- a/src/tasks.py
++++ b/src/tasks.py
+@@ -1,2 +1,3 @@
+ def run(task):
++    logger.info("starting task %s", task.id)
+     return task.execute()

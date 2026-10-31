@@ -1,0 +1,7 @@
+diff --git a/src/pages.py b/src/pages.py
+--- a/src/pages.py
++++ b/src/pages.py
+@@ -1,0 +2,3 @@
++def page_count(total, page_size):
++    return total // page_size
++

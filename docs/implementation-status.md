@@ -16,17 +16,17 @@ Updated: 2026-10-31
 - [ ] Verify migrations and local services against PostgreSQL/Redis with Docker Compose.
 - [ ] Manually verify a live GitHub delivery after App configuration is supplied.
 
-The implementation does not enqueue review work. Invalid signatures and malformed supported PR events are rejected; accepted events are committed with their installation/repository/PR metadata in one database transaction. Unsupported events are retained as processed delivery records.
+Invalid signatures and malformed supported PR events are rejected; accepted events are committed with their installation/repository/PR metadata in one database transaction. Unsupported events are retained as processed delivery records.
 
 Docker Desktop was not running during implementation, so Postgres/Redis container startup and the PostgreSQL migration remain unverified. Live GitHub delivery also needs a configured GitHub App and HTTPS tunnel.
 
 ## Planned sequence
 
-1. Milestone 1: complete verification, then stop for explicit approval.
-2. Milestone 2: GitHub retrieval and LLM review engine, depending on the schema and safe event ingestion from Milestone 1.
-3. Milestone 3: Celery queue, idempotent review persistence, and read APIs, depending on the review engine contract.
-4. Milestone 4: Next.js dashboard, depending on stable read/feedback APIs.
-5. Milestone 5: CI, evaluation fixtures, documentation polish, and deployment readiness, after backend and frontend behavior stabilize.
+1. Milestone 1: complete; SQLite migration and webhook behavior verified.
+2. Milestone 2: complete; mocked GitHub and LLM review engine verified.
+3. Milestone 3: complete; durable queue, idempotent worker, local-only APIs, and finding feedback implemented.
+4. Milestone 4: complete; local Next.js dashboard, typed API client, feedback, filters, and active-review polling.
+5. Milestone 5: complete for localhost demo; CI, labeled evaluation fixtures/scorer, setup/security/retention documentation.
 
 Work within each milestone can be split by bounded components. Cross-milestone work should wait for the preceding API and data contracts. Public deployment remains blocked on authenticated access control.
 
@@ -40,4 +40,34 @@ Work within each milestone can be split by bounded components. Cross-milestone w
 - [x] Mock-based tests for token caching, pagination, content/context limits, line anchoring, invalid output, and empty results.
 - [ ] Verify with a configured GitHub App and opted-in OpenAI model; no live integration was exercised.
 
-After integration review, the combined Milestone 1 and 2 suite passes 26 tests. Ruff lint/format and whitespace checks pass. Live GitHub/OpenAI access and PostgreSQL/Redis startup remain unverified in this environment.
+After integration review, the combined Milestone 1–3 suite passes 42 tests. Ruff lint/format and whitespace checks pass. The complete Alembic chain upgrades against SQLite. Live GitHub/OpenAI access and PostgreSQL/Redis container startup remain unverified in this environment.
+
+## Milestone 3 — Async execution, persistence, and read APIs
+
+- [x] Persist one queued review and outbox record per PR commit in the webhook transaction.
+- [x] Dispatch Celery jobs after commit and periodically reconcile queued work and stale running leases.
+- [x] Use a per-task async engine, lease-token fencing, idempotent finding replacement, sanitized failures, and commit-SHA superseding.
+- [x] Add local-only, paginated repository/PR/review APIs and validated finding feedback.
+- [x] Test worker persistence/replay, enqueue recovery, stale SHA handling, API access boundaries, and feedback.
+- [ ] Verify the worker and recovery loop with live Redis/PostgreSQL and a configured GitHub App; external services were not exercised.
+
+## Milestone 4 — Next.js dashboard
+
+- [x] Add responsive dashboard, repositories, repository pull request list, pull request review history, and review detail pages.
+- [x] Display findings grouped by severity, allow severity filtering and helpful/false-positive feedback.
+- [x] Add pagination, loading/error/empty states, and poll only queued/running reviews.
+- [x] Proxy browser `/api/*` requests from Next.js to the backend; keep provider credentials server-side.
+- [x] Add frontend component tests and startup/source-upload privacy guidance.
+- [ ] Manually verify the browser flow against live local Postgres/Redis and webhook-created review data.
+
+The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and a production build in its isolated worktree. Root review fixed FastAPI structured error handling and added recent pull request/review summary content to the dashboard. The final integrated frontend checks still need a fresh dependency install in the primary worktree.
+
+## Milestone 5 — Quality, evaluation, and deployment readiness
+
+- [x] Add backend/frontend CI with mock credentials and no live external API requirements.
+- [x] Add ten hand-authored, labeled unified diff fixtures and a scorer for precision, recall, false positives, duration, and estimated cost.
+- [x] Document fixture validation/scoring, setup checks, source upload opt-in, and local retention/reset behavior.
+- [x] Keep public deployment explicitly unsupported until authenticated access control and installation-scoped authorization exist.
+- [ ] Run CI on the hosting provider and verify Compose startup/migrations against PostgreSQL and Redis locally.
+
+No live model benchmark results are claimed. Fixture timing and cost remain unavailable unless supplied as observed prediction data. The reviewer labels are synthetic and should be independently checked before model comparisons.

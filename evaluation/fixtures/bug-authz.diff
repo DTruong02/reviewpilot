@@ -1,0 +1,8 @@
+diff --git a/src/documents.py b/src/documents.py
+--- a/src/documents.py
++++ b/src/documents.py
+@@ -6,0 +7,4 @@
++def get_document(request_user, document_id, db):
++    document = db.get(document_id)
++    if request_user.is_authenticated:
++        return document

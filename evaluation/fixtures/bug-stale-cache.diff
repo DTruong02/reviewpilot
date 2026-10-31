@@ -1,0 +1,8 @@
+diff --git a/src/cache.py b/src/cache.py
+--- a/src/cache.py
++++ b/src/cache.py
+@@ -4,0 +5,4 @@
++def update_record(key, value, db, cache):
++    db.write(key, value)
++    return cache.get(key)
++

@@ -168,41 +168,69 @@ async def _request_with_retries(
     params: dict[str, str | int] | None = None,
     json: dict | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    max_response_bytes: int = 256_000,
+    max_response_error_code: str = "github_response_too_large",
     sleep=asyncio.sleep,
     jitter=random.random,
 ) -> httpx.Response:
     for attempt in range(3):
         try:
-            response = await client.request(
+            async with client.stream(
                 method, url, headers=headers, params=params, json=json, timeout=timeout
-            )
+            ) as response:
+                limited = response.status_code == 429 or (
+                    response.status_code == 403
+                    and (
+                        response.headers.get("X-RateLimit-Remaining") == "0"
+                        or response.headers.get("Retry-After") is not None
+                    )
+                )
+                if limited or response.status_code >= 500:
+                    if attempt == 2:
+                        retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                        code = "github_rate_limited" if limited else "github_unavailable"
+                        raise GitHubClientError(code, response.status_code, retry_after)
+                    wait = (
+                        _parse_retry_after(response.headers.get("Retry-After")) if limited else None
+                    )
+                    await sleep(
+                        min(
+                            wait if wait is not None else 0.25 * (2**attempt) + jitter() * 0.15,
+                            2.0,
+                        )
+                    )
+                    continue
+                if response.is_error:
+                    code = (
+                        "github_permission_denied"
+                        if response.status_code in (401, 403)
+                        else "github_request_failed"
+                    )
+                    raise GitHubClientError(code, response.status_code)
+
+                content_length = response.headers.get("Content-Length")
+                if (
+                    content_length
+                    and content_length.isdecimal()
+                    and int(content_length) > max_response_bytes
+                ):
+                    raise GitHubClientError(max_response_error_code, response.status_code)
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_response_bytes:
+                        raise GitHubClientError(max_response_error_code, response.status_code)
+                return httpx.Response(
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    content=bytes(body),
+                    request=response.request,
+                )
         except (httpx.TimeoutException, httpx.NetworkError):
             if attempt == 2:
                 raise GitHubClientError("github_network_error") from None
             await sleep(min(0.25 * (2**attempt) + jitter() * 0.15, 1.0))
             continue
-
-        limited = response.status_code == 429 or (
-            response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0"
-        )
-        if limited or response.status_code >= 500:
-            if attempt == 2:
-                retry_after = _parse_retry_after(response.headers.get("Retry-After"))
-                code = "github_rate_limited" if limited else "github_unavailable"
-                raise GitHubClientError(code, response.status_code, retry_after)
-            wait = _parse_retry_after(response.headers.get("Retry-After")) if limited else None
-            await sleep(
-                min(wait if wait is not None else 0.25 * (2**attempt) + jitter() * 0.15, 2.0)
-            )
-            continue
-        if response.is_error:
-            code = (
-                "github_permission_denied"
-                if response.status_code in (401, 403)
-                else "github_request_failed"
-            )
-            raise GitHubClientError(code, response.status_code)
-        return response
     raise GitHubClientError("github_unavailable")
 
 
@@ -276,9 +304,9 @@ class GitHubClient:
                 headers=_headers(token),
                 params={"per_page": page_size, "page": page},
                 timeout=self._timeout,
+                max_response_bytes=MAX_DIFF_RESPONSE_BYTES,
+                max_response_error_code="github_diff_response_too_large",
             )
-            if len(response.content) > MAX_DIFF_RESPONSE_BYTES:
-                raise GitHubClientError("github_diff_response_too_large", response.status_code)
             try:
                 items = response.json()
                 if not isinstance(items, list):
@@ -322,14 +350,21 @@ class GitHubClient:
             f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(repository, safe='')}"
             f"/contents/{encoded_path}"
         )
-        response = await _request_with_retries(
-            self._http,
-            "GET",
-            url,
-            headers=_headers(token),
-            params={"ref": ref},
-            timeout=self._timeout,
-        )
+        try:
+            response = await _request_with_retries(
+                self._http,
+                "GET",
+                url,
+                headers=_headers(token),
+                params={"ref": ref},
+                timeout=self._timeout,
+                max_response_bytes=self._max_source_file_bytes * 2 + 100_000,
+            )
+        except GitHubClientError as exc:
+            # A moved, deleted, or stale PR path should not fail the whole review.
+            if exc.status_code == 404:
+                return None
+            raise
         try:
             body = response.json()
             size = body.get("size")

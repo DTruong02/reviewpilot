@@ -12,7 +12,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.schemas.review import LLMFindings, ProviderOutput, PullRequestFile, ReviewContext
 from app.services.context_builder import ContextBuilder, added_line_numbers
-from app.services.github import GitHubAppTokenProvider, GitHubClient, is_supported_source_path
+from app.services.github import (
+    GitHubAppTokenProvider,
+    GitHubClient,
+    GitHubClientError,
+    _request_with_retries,
+    is_supported_source_path,
+)
 from app.services.llm import FakeLLMClient, LLMClientError, OpenAIReviewClient
 from app.services.review_engine import ReviewEngine, ReviewEngineError
 
@@ -97,6 +103,26 @@ async def test_context_builder_honors_file_and_changed_line_budgets():
     )
     assert len(context.files) == 1
     assert context.files[0].file_path == "src/first.py"
+
+
+@pytest.mark.asyncio
+async def test_context_builder_does_not_fetch_after_budget_is_exhausted():
+    calls = []
+
+    async def fetch(_path):
+        calls.append(1)
+        return "keep\nnew()\n"
+
+    context = await ContextBuilder(max_context_chars=100).build(
+        repository="octo/demo",
+        pull_request_number=3,
+        pull_request_title="a title",
+        head_sha=SHA,
+        changed_files=[file_diff()],
+        fetch_content=fetch,
+    )
+    assert context.files == ()
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -215,6 +241,56 @@ async def test_fetch_content_rejects_binary_and_oversized_files():
         assert await github.fetch_file_content(9, "o", "r", "large.py", SHA) is None
 
 
+@pytest.mark.asyncio
+async def test_github_client_retries_secondary_rate_limit_with_retry_after():
+    calls = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(403, headers={"Retry-After": "0"}, json={"message": "limited"})
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        github = GitHubClient(StaticToken(), http, max_files=2)
+        assert await github.fetch_pull_request_files(9, "octo", "demo", 3) == []
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_github_response_body_is_capped_while_streaming():
+    class LargeBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"1234567"
+            yield b"8901234"
+
+        async def aclose(self):
+            return None
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, stream=LargeBody(), headers={})
+        )
+    ) as http:
+        with pytest.raises(GitHubClientError, match="github_response_too_large"):
+            await _request_with_retries(
+                http,
+                "GET",
+                "https://api.github.com/test",
+                headers={},
+                max_response_bytes=10,
+            )
+
+
+@pytest.mark.asyncio
+async def test_missing_file_context_is_skipped():
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(404))
+    ) as http:
+        github = GitHubClient(StaticToken(), http)
+        assert await github.fetch_file_content(9, "octo", "demo", "src/gone.py", SHA) is None
+
+
 class StaticToken:
     async def get_token(self, installation_id: int) -> str:
         return "test-token"
@@ -236,6 +312,8 @@ class SequenceLLM:
     async def review(self, context):
         self.calls += 1
         output = self.outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
         return ProviderOutput(output=output, model_name="fake", duration_ms=2)
 
 
@@ -333,6 +411,36 @@ async def test_invalid_model_output_retries_with_a_bounded_attempt_count():
     )
     assert client.calls == 2
     assert result.findings == ()
+
+
+@pytest.mark.asyncio
+async def test_openai_invalid_structured_output_error_retries_once():
+    client = SequenceLLM([LLMClientError("openai_empty_structured_output"), {"findings": []}])
+    result = await ReviewEngine(StaticGitHub(), client, validation_attempts=2).review_pull_request(
+        installation_id=1,
+        owner="octo",
+        repository="demo",
+        pull_request_number=3,
+        pull_request_title="title",
+        head_sha=SHA,
+    )
+    assert client.calls == 2
+    assert result.findings == ()
+
+
+@pytest.mark.asyncio
+async def test_permanent_llm_error_fails_without_retry():
+    client = SequenceLLM([LLMClientError("openai_not_configured"), {"findings": []}])
+    with pytest.raises(ReviewEngineError, match="openai_not_configured"):
+        await ReviewEngine(StaticGitHub(), client).review_pull_request(
+            installation_id=1,
+            owner="octo",
+            repository="demo",
+            pull_request_number=3,
+            pull_request_title="title",
+            head_sha=SHA,
+        )
+    assert client.calls == 1
 
 
 @pytest.mark.asyncio

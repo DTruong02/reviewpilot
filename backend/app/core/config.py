@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     review_timeout_seconds: float = Field(default=45, ge=1, le=180)
     github_token_cache_skew_seconds: int = Field(default=300, ge=30, le=900)
 
-    model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()

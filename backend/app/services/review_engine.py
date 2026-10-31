@@ -13,7 +13,7 @@ from app.schemas.review import (
 )
 from app.services.context_builder import ContextBuilder
 from app.services.github import GitHubClient
-from app.services.llm import LLMClient
+from app.services.llm import LLMClient, LLMClientError
 
 
 class ReviewEngineError(RuntimeError):
@@ -98,6 +98,15 @@ class ReviewEngine:
         for _ in range(self.validation_attempts):
             try:
                 provider_output = await self.llm.review(context)
+            except LLMClientError as exc:
+                if exc.code in {
+                    "openai_empty_structured_output",
+                    "openai_invalid_structured_output",
+                }:
+                    provider_output = None
+                    parsed = None
+                    continue
+                raise ReviewEngineError(exc.code) from None
             except Exception as exc:
                 code = getattr(exc, "code", "llm_review_failed")
                 raise ReviewEngineError(str(code)) from None

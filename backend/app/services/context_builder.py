@@ -93,7 +93,10 @@ class ContextBuilder:
     ) -> ReviewContext:
         files: list[ReviewFile] = []
         total_changed = 0
-        total_chars = 0
+        safe_title = redact_obvious_secrets(pull_request_title)[:1000]
+        total_chars = (
+            len(repository) + len(str(pull_request_number)) + len(safe_title) + len(head_sha) + 64
+        )
         for changed_file in changed_files:
             if len(files) >= self.max_files:
                 break
@@ -106,11 +109,16 @@ class ContextBuilder:
             line_count = changed_file.additions + changed_file.deletions
             if line_count <= 0 or total_changed + line_count > self.max_changed_lines:
                 continue
+            patch = redact_obvious_secrets(patch)
+            remaining = self.max_context_chars - total_chars
+            if remaining <= 0:
+                break
+            if len(patch) >= remaining:
+                continue
             source = await fetch_content(changed_file.path)
             if source is None:
                 continue
             code_context = _context_windows(source, added, self.context_lines)
-            patch = redact_obvious_secrets(patch)
             code_context = redact_obvious_secrets(code_context)
             remaining = self.max_context_chars - total_chars
             if remaining <= 0:
@@ -139,7 +147,7 @@ class ContextBuilder:
         return ReviewContext(
             repository=repository,
             pull_request_number=pull_request_number,
-            pull_request_title=redact_obvious_secrets(pull_request_title)[:1000],
+            pull_request_title=safe_title,
             head_sha=head_sha,
             files=tuple(files),
         )

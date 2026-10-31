@@ -39,3 +39,5 @@ Work within each milestone can be split by bounded components. Cross-milestone w
 - [x] Pydantic findings validation, changed-line anchor enforcement, deduplication, max findings, and bounded invalid-output retry.
 - [x] Mock-based tests for token caching, pagination, content/context limits, line anchoring, invalid output, and empty results.
 - [ ] Verify with a configured GitHub App and opted-in OpenAI model; no live integration was exercised.
+
+After integration review, the combined Milestone 1 and 2 suite passes 26 tests. Ruff lint/format and whitespace checks pass. Live GitHub/OpenAI access and PostgreSQL/Redis startup remain unverified in this environment.

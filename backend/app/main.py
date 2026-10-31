@@ -1,11 +1,33 @@
+import ipaddress
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.routes.read import router as read_router
 from app.api.routes.webhooks import router as webhook_router
 
 app = FastAPI(title="ReviewPilot API", version="0.1.0")
+
+
+@app.middleware("http")
+async def local_only_api_guard(request, call_next):
+    if request.url.path.startswith("/api/") and request.url.path != "/api/webhooks/github":
+        client_host = request.client.host if request.client else None
+        try:
+            is_loopback = ipaddress.ip_address(client_host).is_loopback
+        except (ValueError, TypeError):
+            is_loopback = False
+        if not is_loopback:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "code": "local_access_only",
+                    "message": "This API is available only from the local machine.",
+                },
+            )
+    return await call_next(request)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -30,3 +52,4 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(webhook_router)
+app.include_router(read_router)

@@ -1,6 +1,6 @@
 # ReviewPilot
 
-ReviewPilot is a local, advisory GitHub pull request review dashboard. Milestones 1–3 deliver signed webhook ingestion, an injectable review engine, an asynchronous worker with recovery, and local-only read/feedback APIs. The dashboard is not implemented yet.
+ReviewPilot is a local, advisory GitHub pull request review dashboard. It includes signed webhook ingestion, an injectable review engine, asynchronous worker recovery, local read/feedback APIs, and a Next.js dashboard.
 
 ## Requirements
 
@@ -24,6 +24,20 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 The API listens on localhost. `GET http://127.0.0.1:8000/health` is a liveness check. Webhook requests go to `POST /api/webhooks/github`. OpenAPI docs are available at `/docs` during development. To run the tests, execute `python -m pytest` from `backend`.
+
+## Dashboard
+
+With the API running, open a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Visit `http://localhost:3000`. The Next.js server proxies `/api/*` to `API_BASE_URL` (default `http://127.0.0.1:8000`); set `API_BASE_URL` in the frontend process environment when using another local API address. The browser only calls same-origin paths and does not receive GitHub or OpenAI credentials.
+
+The dashboard displays repository and pull request metadata, stored review findings and status, and lets users submit helpful/false-positive feedback. It polls only while a review is queued or running. ReviewPilot is advisory; findings are not automated decisions. Source context may be sent to the configured OpenAI provider only when the backend source-upload opt-in is enabled. See the security boundary below and keep the application local.
 
 In separate terminals from `backend`, start the worker and queue reconciler:
 

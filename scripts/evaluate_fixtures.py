@@ -23,7 +23,9 @@ def load_manifest() -> dict[str, Any]:
             raise ValueError(f"missing or duplicate fixture id: {fixture_id!r}")
         seen.add(fixture_id)
         diff_path = FIXTURE_DIR / fixture["diff"]
-        if not diff_path.is_file() or "diff --git " not in diff_path.read_text(encoding="utf-8"):
+        if not diff_path.is_file() or "diff --git " not in diff_path.read_text(
+            encoding="utf-8"
+        ):
             raise ValueError(f"missing or invalid unified diff for {fixture_id}")
         label_ids: set[str] = set()
         for label in fixture.get("labels", []):
@@ -46,7 +48,7 @@ def score(predictions_path: Path) -> dict[str, Any]:
     manifest = load_manifest()
     predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
     if not isinstance(predictions, list):
-        raise ValueError("predictions must be a JSON array")
+        raise TypeError("predictions must be a JSON array")
     fixture_ids = {f["id"] for f in manifest["fixtures"]}
     known = {
         (fixture["id"], label["id"])
@@ -70,7 +72,9 @@ def score(predictions_path: Path) -> dict[str, Any]:
     false_negatives = len(known - observed)
     clean_fixture_ids = {f["id"] for f in manifest["fixtures"] if not f["labels"]}
     clean_false_positive_ids = {
-        fixture_id for fixture_id, _ in observed - known if fixture_id in clean_fixture_ids
+        fixture_id
+        for fixture_id, _ in observed - known
+        if fixture_id in clean_fixture_ids
     }
     precision = true_positives / len(observed) if observed else None
     recall = true_positives / len(known) if known else None
@@ -87,9 +91,12 @@ def score(predictions_path: Path) -> dict[str, Any]:
         "false_negatives": false_negatives,
         "precision": precision,
         "recall": recall,
-        "false_positive_rate_per_clean_fixture": len(clean_false_positive_ids) / clean_count,
+        "false_positive_rate_per_clean_fixture": len(clean_false_positive_ids)
+        / clean_count,
         "average_review_duration_ms": average_observation(predictions, "duration_ms"),
-        "average_estimated_cost_usd": average_observation(predictions, "estimated_cost_usd"),
+        "average_estimated_cost_usd": average_observation(
+            predictions, "estimated_cost_usd"
+        ),
     }
 
 
@@ -100,7 +107,9 @@ def average_observation(rows: list[dict[str, Any]], field: str) -> float | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictions", type=Path, help="observed predictions JSON to score")
+    parser.add_argument(
+        "--predictions", type=Path, help="observed predictions JSON to score"
+    )
     args = parser.parse_args()
     manifest = load_manifest()
     if args.predictions:

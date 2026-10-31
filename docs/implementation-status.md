@@ -25,8 +25,8 @@ Docker Desktop was not running during implementation, so Postgres/Redis containe
 1. Milestone 1: complete; SQLite migration and webhook behavior verified.
 2. Milestone 2: complete; mocked GitHub and LLM review engine verified.
 3. Milestone 3: complete; durable queue, idempotent worker, local-only APIs, and finding feedback implemented.
-4. Milestone 4: Next.js dashboard, depending on the read/feedback APIs.
-5. Milestone 5: CI, evaluation fixtures, documentation polish, and deployment readiness, after backend and frontend behavior stabilize.
+4. Milestone 4: complete; local Next.js dashboard, typed API client, feedback, filters, and active-review polling.
+5. Milestone 5: complete for localhost demo; CI, labeled evaluation fixtures/scorer, setup/security/retention documentation.
 
 Work within each milestone can be split by bounded components. Cross-milestone work should wait for the preceding API and data contracts. Public deployment remains blocked on authenticated access control.
 
@@ -50,3 +50,24 @@ After integration review, the combined Milestone 1–3 suite passes 42 tests. Ru
 - [x] Add local-only, paginated repository/PR/review APIs and validated finding feedback.
 - [x] Test worker persistence/replay, enqueue recovery, stale SHA handling, API access boundaries, and feedback.
 - [ ] Verify the worker and recovery loop with live Redis/PostgreSQL and a configured GitHub App; external services were not exercised.
+
+## Milestone 4 — Next.js dashboard
+
+- [x] Add responsive dashboard, repositories, repository pull request list, pull request review history, and review detail pages.
+- [x] Display findings grouped by severity, allow severity filtering and helpful/false-positive feedback.
+- [x] Add pagination, loading/error/empty states, and poll only queued/running reviews.
+- [x] Proxy browser `/api/*` requests from Next.js to the backend; keep provider credentials server-side.
+- [x] Add frontend component tests and startup/source-upload privacy guidance.
+- [ ] Manually verify the browser flow against live local Postgres/Redis and webhook-created review data.
+
+The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and a production build in its isolated worktree. Root review fixed FastAPI structured error handling and added recent pull request/review summary content to the dashboard. The final integrated frontend checks still need a fresh dependency install in the primary worktree.
+
+## Milestone 5 — Quality, evaluation, and deployment readiness
+
+- [x] Add backend/frontend CI with mock credentials and no live external API requirements.
+- [x] Add ten hand-authored, labeled unified diff fixtures and a scorer for precision, recall, false positives, duration, and estimated cost.
+- [x] Document fixture validation/scoring, setup checks, source upload opt-in, and local retention/reset behavior.
+- [x] Keep public deployment explicitly unsupported until authenticated access control and installation-scoped authorization exist.
+- [ ] Run CI on the hosting provider and verify Compose startup/migrations against PostgreSQL and Redis locally.
+
+No live model benchmark results are claimed. Fixture timing and cost remain unavailable unless supplied as observed prediction data. The reviewer labels are synthetic and should be independently checked before model comparisons.

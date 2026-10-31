@@ -31,13 +31,17 @@ With the API running, open a second terminal:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
 Visit `http://localhost:3000`. The Next.js server proxies `/api/*` to `API_BASE_URL` (default `http://127.0.0.1:8000`); set `API_BASE_URL` in the frontend process environment when using another local API address. The browser only calls same-origin paths and does not receive GitHub or OpenAI credentials.
 
 The dashboard displays repository and pull request metadata, stored review findings and status, and lets users submit helpful/false-positive feedback. It polls only while a review is queued or running. ReviewPilot is advisory; findings are not automated decisions. Source context may be sent to the configured OpenAI provider only when the backend source-upload opt-in is enabled. See the security boundary below and keep the application local.
+
+## Quality checks and evaluation
+
+Run the backend suite and formatting checks from `backend` with `python -m pytest`, `ruff check .`, and `ruff format --check .`. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test -- --run`, and `npm run build`. CI runs these checks with fake credentials and no live GitHub/OpenAI calls. The ten synthetic review fixtures can be validated from the repository root with `python scripts/evaluate_fixtures.py`; scoring requires recorded model predictions. See [evaluation/README.md](evaluation/README.md) for the methodology and limits.
 
 In separate terminals from `backend`, start the worker and queue reconciler:
 
@@ -61,6 +65,10 @@ Postgres and Redis run on loopback ports 5432 and 6379. Postgres state is held i
 ## Security boundary
 
 This MVP has no dashboard authentication. Keep the backend bound to localhost and do not deploy it publicly. Non-webhook `/api` endpoints also reject non-loopback clients; the signed webhook endpoint remains available through the configured tunnel. Private PR metadata and findings are stored in PostgreSQL. See [docs/implementation-status.md](docs/implementation-status.md) for milestone scope and remaining work.
+
+## Local data retention
+
+ReviewPilot stores repository and pull request metadata, review status and metrics, findings, and feedback in PostgreSQL. It does not persist retrieved source files or diffs. There is no per-repository deletion UI or API yet. For a full local data reset, stop Compose with `docker compose -f infrastructure/docker-compose.yml down -v`; this deletes the PostgreSQL volume and all stored ReviewPilot data.
 
 ## Milestone 2 review engine
 

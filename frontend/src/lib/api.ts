@@ -9,7 +9,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try { response = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...init?.headers }, cache: "no-store" }); }
   catch { throw new ApiError("The ReviewPilot API is unreachable."); }
-  if (!response.ok) { let message = `Request failed (${response.status}).`; try { const body = await response.json(); message = body.detail ?? message; } catch { /* use safe status */ } throw new ApiError(message, response.status); }
+  if (!response.ok) {
+    let message = `Request failed (${response.status}).`;
+    try {
+      const body: { detail?: unknown } = await response.json();
+      if (typeof body.detail === "string") message = body.detail;
+      else if (body.detail && typeof body.detail === "object" && "message" in body.detail && typeof body.detail.message === "string") message = body.detail.message;
+    } catch { /* use safe status */ }
+    throw new ApiError(message, response.status);
+  }
   return response.json() as Promise<T>;
 }
 export const api = {

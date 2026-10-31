@@ -119,6 +119,24 @@ class Review(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
+    processing_token: Mapped[str | None] = mapped_column(String(36))
+
+
+class ReviewOutbox(Base):
+    """One durable dispatch record per review; retries reuse the same review identity."""
+
+    __tablename__ = "review_outbox"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    review_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reviews.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    enqueue_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Finding(Base):

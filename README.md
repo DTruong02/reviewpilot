@@ -1,12 +1,12 @@
 # ReviewPilot
 
-ReviewPilot is a local, advisory GitHub pull request review dashboard. Milestone 1 delivers the API foundation and authenticated webhook ingestion. The review worker and dashboard are not implemented yet.
+ReviewPilot is a local, advisory GitHub pull request review dashboard. Milestones 1 and 2 deliver the API foundation, authenticated webhook ingestion, and an injectable review engine. The review worker and dashboard are not implemented yet.
 
 ## Requirements
 
 - Python 3.12 or newer
 - Docker Desktop with Docker Compose
-- GitHub App configuration only for live webhook verification
+- GitHub App configuration for live webhook delivery and retrieval
 
 ## Local setup
 
@@ -37,4 +37,10 @@ Postgres and Redis run on loopback ports 5432 and 6379. Postgres state is held i
 
 ## Security boundary
 
-This MVP has no dashboard authentication. Keep the backend bound to localhost and do not deploy it publicly. Private PR metadata is stored in PostgreSQL. No source code is fetched or sent to an LLM in Milestone 1. See [docs/implementation-status.md](docs/implementation-status.md) for milestone scope and remaining work.
+This MVP has no dashboard authentication. Keep the backend bound to localhost and do not deploy it publicly. Private PR metadata is stored in PostgreSQL. See [docs/implementation-status.md](docs/implementation-status.md) for milestone scope and remaining work.
+
+## Milestone 2 review engine
+
+The backend includes an injectable GitHub App token provider/client, paginated pull-request file retrieval, a bounded context builder, strict finding validation, and an injectable LLM interface. `REVIEW_DRY_RUN=true` selects a deterministic fake provider and makes no model request. To use OpenAI, configure `OPENAI_API_KEY` and `OPENAI_MODEL`, set `REVIEW_DRY_RUN=false`, and separately set `REVIEW_ALLOW_SOURCE_UPLOAD=true`. This sends bounded pull request source and title text to the configured model provider. The review engine does not write GitHub comments or persist review source.
+
+The GitHub App needs Repository metadata, Pull requests, and Contents read-only permissions. Configure `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` for retrieval. The client uses short-lived installation tokens, bounded pagination, and capped source retrieval. Tests use mock HTTP transports and fake LLM responses; no live GitHub or OpenAI credentials are required.

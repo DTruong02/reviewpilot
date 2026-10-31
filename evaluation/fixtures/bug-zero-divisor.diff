@@ -1,0 +1,7 @@
+diff --git a/src/ratio.py b/src/ratio.py
+--- a/src/ratio.py
++++ b/src/ratio.py
+@@ -3,0 +4,3 @@
++def ratio(total, count):
++    return total / count
++

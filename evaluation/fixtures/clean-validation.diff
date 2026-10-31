@@ -1,0 +1,8 @@
+diff --git a/src/limits.py b/src/limits.py
+--- a/src/limits.py
++++ b/src/limits.py
+@@ -1,2 +1,4 @@
+ def limit(value):
++    if value < 0:
++        raise ValueError("value must be non-negative")
+     return min(value, 100)

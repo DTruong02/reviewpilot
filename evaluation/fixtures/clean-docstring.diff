@@ -1,0 +1,7 @@
+diff --git a/src/formatting.py b/src/formatting.py
+--- a/src/formatting.py
++++ b/src/formatting.py
+@@ -1,2 +1,3 @@
+ def normalize(value):
++    """Return a normalized string value."""
+     return value.strip().lower()

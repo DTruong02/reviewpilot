@@ -1,0 +1,9 @@
+diff --git a/src/export.py b/src/export.py
+--- a/src/export.py
++++ b/src/export.py
+@@ -2,0 +3,5 @@
++def load_rows(path):
++    handle = open(path)
++    rows = parse_rows(handle)
++    return rows
++

@@ -1,5 +1,6 @@
 # Implementation status
 
+
 Updated: 2026-10-31
 
 ## Milestone 1 — Foundation + authenticated webhook ingestion
@@ -28,3 +29,13 @@ Docker Desktop was not running during implementation, so Postgres/Redis containe
 5. Milestone 5: CI, evaluation fixtures, documentation polish, and deployment readiness, after backend and frontend behavior stabilize.
 
 Work within each milestone can be split by bounded components. Cross-milestone work should wait for the preceding API and data contracts. Public deployment remains blocked on authenticated access control.
+
+## Milestone 2 — GitHub retrieval + review engine
+
+- [x] GitHub App JWT and cached installation token provider with short expiry margin.
+- [x] Paginated PR file retrieval, conservative path filtering, source-size caps, and limited file-content retrieval.
+- [x] Context builder with changed-line anchoring, context/file/change limits, generated/binary skipping, and obvious credential redaction.
+- [x] Injectable LLM interface, deterministic fake, and configurable OpenAI Structured Outputs adapter.
+- [x] Pydantic findings validation, changed-line anchor enforcement, deduplication, max findings, and bounded invalid-output retry.
+- [x] Mock-based tests for token caching, pagination, content/context limits, line anchoring, invalid output, and empty results.
+- [ ] Verify with a configured GitHub App and opted-in OpenAI model; no live integration was exercised.

@@ -209,6 +209,9 @@ async def get_review(review_id: UUID, session: SessionDep) -> ReviewRead:
         input_tokens=review.input_tokens,
         output_tokens=review.output_tokens,
         duration_ms=review.duration_ms,
+        context_mode=review.context_mode,
+        context_fallback_reason=review.context_fallback_reason,
+        context_metadata=review.context_metadata,
         findings=[FindingRead.model_validate(finding) for finding in findings],
     )
 

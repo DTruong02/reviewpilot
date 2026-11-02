@@ -82,7 +82,7 @@ No live model benchmark results are claimed. Fixture timing and cost remain unav
 - [x] Install the pinned Tree-sitter dependency set in an isolated Python 3.12 Windows environment and run the complete existing suite.
 - [ ] Verify grammar wheel installation and the complete suite on Linux CI.
 
-The parser milestone remains standalone from PR review inputs and dashboard behavior. Dynamic imports, aliases, and runtime call relationships are not resolved. Milestone B adds persisted indexing but still does not feed indexed context into reviews.
+The parser remains a standalone service used by commit-scoped indexing. Dynamic imports, aliases, and runtime call relationships are not resolved; Milestone C uses indexed symbols and static file-import edges for review context.
 
 ## Advanced extension — Milestone B: commit-scoped indexing
 
@@ -94,4 +94,15 @@ The parser milestone remains standalone from PR review inputs and dashboard beha
 - [x] Add SQLite/mock tests for idempotence, commit isolation, cache reuse, filters, limits, status, and failure recovery.
 - [ ] Verify pgvector extension migration and GitHub/OpenAI integrations against live services; no external credentials or services were used.
 
-The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. Retrieval and PR review integration remain out of scope until Milestone C.
+The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. PostgreSQL pgvector and live provider/GitHub integrations remain unverified.
+
+## Advanced extension — Milestone C: context retrieval + review integration
+
+- [x] Match added diff lines to symbols from an index with the exact repository ID and head SHA.
+- [x] Retrieve both static importers and imported dependencies; skip semantic-similarity retrieval for local/mock hash vectors.
+- [x] Fetch bounded snippets from the pinned commit, redact obvious credentials, and use a shared approximate token budget.
+- [x] Fall back to diff-only review if the index or retrieval path is unavailable; persist mode and fallback reason.
+- [x] Include validated context citations in findings and expose source-free retrieval provenance in review APIs/dashboard.
+- [ ] Exercise ready-index RAG with PostgreSQL/pgvector and an opted-in live GitHub/OpenAI setup.
+
+Context snippets are held in memory for the review request only. Provenance stores symbol IDs, paths, line ranges, commit SHA, retrieval reason, and score, not snippets. Semantic similarity is disabled for local/mock hash vectors; it is available only for non-mock embeddings configured with repository source-upload consent.

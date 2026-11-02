@@ -28,6 +28,23 @@ class ReviewFile(BaseModel):
     deletions: int = Field(ge=0)
 
 
+class RetrievedCodeContext(BaseModel):
+    """A bounded, source-backed snippet included in the model request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_path: str = Field(min_length=1, max_length=1024)
+    symbol_id: str = Field(min_length=1, max_length=64)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    retrieval_reason: Literal[
+        "changed_symbol", "imported_file", "importer_file", "semantic_similarity"
+    ]
+    score: float = Field(ge=0, le=1)
+    snippet: str = Field(min_length=1, max_length=8000)
+
+
 class ReviewContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -36,6 +53,32 @@ class ReviewContext(BaseModel):
     pull_request_title: str = Field(max_length=1000)
     head_sha: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     files: tuple[ReviewFile, ...] = Field(max_length=25)
+    context_mode: Literal["diff_only", "diff_only_fallback", "context_aware"] = "diff_only"
+    context_fallback_reason: str | None = Field(default=None, max_length=100)
+    retrieved_context: tuple[RetrievedCodeContext, ...] = Field(default=(), max_length=40)
+
+
+class EvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    symbol_id: str = Field(min_length=1, max_length=64)
+    file_path: str = Field(min_length=1, max_length=1024)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+
+
+class ContextProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_path: str = Field(min_length=1, max_length=1024)
+    symbol_id: str = Field(min_length=1, max_length=64)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    retrieval_reason: Literal[
+        "changed_symbol", "imported_file", "importer_file", "semantic_similarity"
+    ]
+    score: float = Field(ge=0, le=1)
 
 
 class FindingCandidate(BaseModel):
@@ -48,6 +91,7 @@ class FindingCandidate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     explanation: str = Field(min_length=1, max_length=1200)
     suggested_fix: str | None = Field(default=None, max_length=1200)
+    evidence_refs: list[EvidenceReference] = Field(default_factory=list, max_length=5)
 
 
 class LLMFindings(BaseModel):
@@ -79,3 +123,7 @@ class ReviewResult(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     duration_ms: int
+    context_mode: Literal["diff_only", "diff_only_fallback", "context_aware"] = "diff_only"
+    context_fallback_reason: str | None = None
+    context_metadata: tuple[ContextProvenance, ...] = ()
+    stale_commit: bool = False

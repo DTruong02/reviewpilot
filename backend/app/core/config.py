@@ -18,10 +18,12 @@ class Settings(BaseSettings):
     openai_model: str = ""
     review_dry_run: bool = True
     review_allow_source_upload: bool = False
+    review_context_repository_allowlist: str = ""
     review_max_files: int = Field(default=25, ge=1, le=25)
     review_max_changed_lines: int = Field(default=1500, ge=1, le=100_000)
     review_max_findings: int = Field(default=15, ge=1, le=15)
     review_max_context_chars: int = Field(default=30000, ge=1, le=100_000)
+    review_max_context_tokens: int = Field(default=10_000, ge=100, le=20_000)
     review_context_lines: int = Field(default=10, ge=10, le=50)
     review_max_output_tokens: int = Field(default=3000, ge=1, le=8192)
     review_timeout_seconds: float = Field(default=45, ge=1, le=180)

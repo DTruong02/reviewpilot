@@ -29,6 +29,7 @@ SAFE_ERROR_CODES = frozenset(
         "github_rate_limited",
         "github_unavailable",
         "github_response_too_large",
+        "github_pull_request_response_invalid",
         "github_diff_response_too_large",
         "github_files_response_invalid",
         "github_permission_denied",
@@ -141,6 +142,7 @@ async def process_review_once(
             select(
                 Review.commit_sha,
                 PullRequest.id,
+                Repository.id.label("repository_id"),
                 PullRequest.github_pr_number,
                 PullRequest.title,
                 PullRequest.head_sha,
@@ -168,6 +170,7 @@ async def process_review_once(
             pull_request_number=row.github_pr_number,
             pull_request_title=row.title,
             head_sha=row.commit_sha,
+            repository_id=row.repository_id,
         )
     except ReviewEngineError as exc:
         code = sanitized_error_code(exc.code, "review_engine_failed")
@@ -204,14 +207,18 @@ async def process_review_once(
                     title=finding.title,
                     explanation=finding.explanation,
                     suggested_fix=finding.suggested_fix,
+                    evidence_refs=[ref.model_dump(mode="json") for ref in finding.evidence_refs],
                 )
             )
-        is_stale = current_head_sha != row.commit_sha
+        is_stale = result.stale_commit or current_head_sha != row.commit_sha
         review.status = ReviewStatus.superseded if is_stale else ReviewStatus.completed
         review.model_name = result.model_name
         review.input_tokens = result.input_tokens
         review.output_tokens = result.output_tokens
         review.duration_ms = result.duration_ms
+        review.context_mode = result.context_mode
+        review.context_fallback_reason = result.context_fallback_reason
+        review.context_metadata = [item.model_dump(mode="json") for item in result.context_metadata]
         review.completed_at = datetime.now(UTC)
         review.error_code = None
         review.processing_token = None

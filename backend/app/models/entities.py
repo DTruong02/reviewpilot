@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -131,6 +132,9 @@ class Review(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     processing_token: Mapped[str | None] = mapped_column(String(36))
+    context_mode: Mapped[str] = mapped_column(String(30), nullable=False, default="diff_only")
+    context_fallback_reason: Mapped[str | None] = mapped_column(String(100))
+    context_metadata: Mapped[list[dict] | None] = mapped_column(JSON)
 
 
 class ReviewOutbox(Base):
@@ -164,6 +168,7 @@ class Finding(Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     suggested_fix: Mapped[str | None] = mapped_column(Text)
     feedback: Mapped[str | None] = mapped_column(String(30))
+    evidence_refs: Mapped[list[dict] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

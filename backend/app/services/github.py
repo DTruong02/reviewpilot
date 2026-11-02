@@ -308,6 +308,36 @@ class GitHubClient:
         self._max_source_file_bytes = max(1, min(max_source_file_bytes, MAX_SOURCE_FILE_BYTES))
         self._timeout = timeout_seconds
 
+    async def fetch_pull_request_head_sha(
+        self, installation_id: int, owner: str, repository: str, pull_request_number: int
+    ) -> str:
+        if pull_request_number <= 0 or not owner or not repository:
+            raise GitHubClientError("invalid_pull_request_reference")
+        token = await self._token_provider.get_token(installation_id)
+        url = (
+            f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(repository, safe='')}"
+            f"/pulls/{pull_request_number}"
+        )
+        response = await _request_with_retries(
+            self._http,
+            "GET",
+            url,
+            headers=_headers(token),
+            timeout=self._timeout,
+            max_response_bytes=MAX_DIFF_RESPONSE_BYTES,
+            max_response_error_code="github_response_too_large",
+        )
+        try:
+            payload = response.json()
+            sha = payload["head"]["sha"]
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise GitHubClientError(
+                "github_pull_request_response_invalid", response.status_code
+            ) from None
+        return sha.lower()
+
     async def fetch_pull_request_files(
         self, installation_id: int, owner: str, repository: str, pull_request_number: int
     ) -> list[PullRequestFile]:

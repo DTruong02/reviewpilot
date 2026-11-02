@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.review import ContextProvenance, EvidenceReference
+
 FeedbackValue = Literal["helpful", "false_positive"]
 ReviewStatusValue = Literal["queued", "running", "completed", "failed", "superseded"]
 SeverityValue = Literal["low", "medium", "high"]
@@ -77,6 +79,7 @@ class FindingRead(BaseModel):
     explanation: str
     suggested_fix: str | None
     feedback: FeedbackValue | None
+    evidence_refs: list[EvidenceReference] | None = None
     created_at: datetime
 
 
@@ -86,6 +89,9 @@ class ReviewRead(ReviewSummary):
     output_tokens: int | None
     duration_ms: int | None
     findings: list[FindingRead]
+    context_mode: Literal["diff_only", "diff_only_fallback", "context_aware"] = "diff_only"
+    context_fallback_reason: str | None = None
+    context_metadata: list[ContextProvenance] | None = None
 
 
 class FeedbackUpdate(BaseModel):

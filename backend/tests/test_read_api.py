@@ -166,6 +166,44 @@ async def test_review_detail_and_feedback_update(api):
 
 
 @pytest.mark.asyncio
+async def test_review_detail_exposes_source_free_context_provenance(api):
+    sessions, ids = api
+    async with sessions.begin() as session:
+        review = await session.get(Review, ids["old_review"])
+        review.context_mode = "context_aware"
+        review.context_metadata = [
+            {
+                "file_path": "src/helper.py",
+                "symbol_id": "symbol-123",
+                "start_line": 4,
+                "end_line": 8,
+                "commit_sha": "b" * 40,
+                "retrieval_reason": "imported_file",
+                "score": 0.75,
+            }
+        ]
+        finding = await session.get(Finding, ids["finding"])
+        finding.evidence_refs = [
+            {
+                "symbol_id": "symbol-123",
+                "file_path": "src/helper.py",
+                "start_line": 4,
+                "end_line": 8,
+            }
+        ]
+
+    async with client_for() as client:
+        response = await client.get(f"/api/reviews/{ids['old_review']}")
+
+    assert response.status_code == 200
+    review_json = response.json()
+    assert review_json["context_mode"] == "context_aware"
+    assert review_json["context_metadata"][0]["retrieval_reason"] == "imported_file"
+    assert "snippet" not in review_json["context_metadata"][0]
+    assert review_json["findings"][0]["evidence_refs"][0]["symbol_id"] == "symbol-123"
+
+
+@pytest.mark.asyncio
 async def test_feedback_rejects_values_outside_the_contract(api):
     _, ids = api
     async with client_for() as client:

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import uuid
 from collections.abc import Sequence
@@ -23,6 +24,8 @@ from app.models.entities import (
     RepositoryIndex,
     SymbolEdge,
 )
+from app.schemas.review import PullRequestFile
+from app.services.context_retriever import RepositoryContextRetriever, _snippet
 from app.services.embeddings import (
     DeterministicHashEmbeddingProvider,
     OpenAIEmbeddingProvider,
@@ -186,6 +189,370 @@ async def test_indexes_immutable_commit_resumes_and_caches_embeddings(db):
         cache_count = await session.scalar(select(func.count()).select_from(EmbeddingCache))
         assert index_count == 2
         assert cache_count == 2
+
+
+@pytest.mark.asyncio
+async def test_context_retrieval_is_commit_scoped_and_includes_import_provenance(db):
+    _engine, sessions, repository_id, index_id = db
+    github = FakeGitHub()
+    indexer = RepositoryIndexer(sessions, github, embeddings=CountingEmbeddings())
+    assert (await indexer.index_commit(index_id)).status == "ready"
+    retriever = RepositoryContextRetriever(sessions)
+    diff = PullRequestFile(
+        path="src/main.js",
+        status="modified",
+        additions=1,
+        deletions=1,
+        patch=(
+            "@@ -2 +2 @@\n"
+            "-export function run(input) { return 0; }\n"
+            "+export function run(input) { return helper(input); }\n"
+        ),
+    )
+    fetch_calls = []
+
+    async def fetch(path, ref):
+        fetch_calls.append((path, ref))
+        return github.sources[path] if ref == COMMIT else None
+
+    result = await retriever.retrieve(
+        repository_id=repository_id,
+        head_sha=COMMIT,
+        changed_files=[diff],
+        fetch_content=fetch,
+        token_budget=1000,
+    )
+    reverse_result = await retriever.retrieve(
+        repository_id=repository_id,
+        head_sha=COMMIT,
+        changed_files=[
+            PullRequestFile(
+                path="src/utils.js",
+                status="modified",
+                additions=1,
+                deletions=0,
+                patch="@@ -1 +1 @@\n+export function helper(value) { return value; }\n",
+            )
+        ],
+        fetch_content=fetch,
+        token_budget=1000,
+    )
+
+    assert result.mode == "context_aware"
+    assert {item.retrieval_reason for item in result.items} >= {
+        "changed_symbol",
+        "imported_file",
+    }
+    assert all(item.commit_sha == COMMIT for item in result.items)
+    assert "semantic_similarity" not in {item.retrieval_reason for item in result.items}
+    assert "importer_file" in {item.retrieval_reason for item in reverse_result.items}
+    assert all(ref == COMMIT for _path, ref in fetch_calls)
+    assert "secret" not in " ".join(item.snippet for item in result.items).casefold()
+
+
+@pytest.mark.asyncio
+async def test_context_retrieval_never_crosses_sha_or_repository_and_obeys_budget(db):
+    _engine, sessions, repository_id, index_id = db
+    github = FakeGitHub()
+    indexer = RepositoryIndexer(sessions, github, embeddings=CountingEmbeddings())
+    assert (await indexer.index_commit(index_id)).status == "ready"
+    other_sha = "b" * 40
+    other_symbol_id = uuid.uuid4()
+    async with sessions.begin() as session:
+        installation = await session.scalar(
+            select(Installation).where(Installation.github_installation_id == 700)
+        )
+        other_repository = Repository(
+            installation_id=installation.id,
+            github_repository_id=999,
+            owner="other",
+            name="same-sha",
+            full_name="other/same-sha",
+            private=True,
+        )
+        session.add(other_repository)
+        await session.flush()
+        other_repository_index = RepositoryIndex(
+            id=uuid.uuid4(),
+            repository_id=other_repository.id,
+            commit_sha=other_sha,
+            status="ready",
+            parser_version="tree-sitter-symbols-v1",
+            embedding_model="mock-embed",
+            embedding_version="fixture-v1",
+            embedding_dimension=8,
+            embedding_enabled=True,
+        )
+        session.add(other_repository_index)
+        await session.flush()
+        other_file = CodeFile(
+            id=uuid.uuid4(),
+            index_id=other_repository_index.id,
+            path="src/main.js",
+            blob_sha="c" * 40,
+            language="javascript",
+            content_hash="d" * 64,
+            size_bytes=20,
+            line_count=2,
+            imports_json="[]",
+            status="indexed",
+            has_syntax_errors=False,
+        )
+        session.add(other_file)
+        await session.flush()
+        session.add(
+            CodeSymbol(
+                id=other_symbol_id,
+                file_id=other_file.id,
+                symbol_key="different-repo-symbol",
+                kind="function",
+                qualified_name="other.only",
+                start_line=2,
+                end_line=2,
+                content_hash="e" * 64,
+            )
+        )
+    other_index = RepositoryIndex(
+        id=uuid.uuid4(),
+        repository_id=repository_id,
+        commit_sha=other_sha,
+        status="queued",
+        parser_version="tree-sitter-symbols-v1",
+        embedding_model="mock-embed",
+        embedding_version="fixture-v1",
+        embedding_dimension=8,
+        embedding_enabled=True,
+    )
+    async with sessions.begin() as session:
+        session.add(other_index)
+    assert (await indexer.index_commit(other_index.id)).status == "ready"
+
+    diff = PullRequestFile(
+        path="src/main.js",
+        status="modified",
+        additions=1,
+        deletions=0,
+        patch="@@ -2 +2 @@\n+export function run(input) { return helper(input); }\n",
+    )
+    retriever = RepositoryContextRetriever(sessions)
+    fetch_refs = []
+
+    async def fetch(path, ref):
+        fetch_refs.append(ref)
+        return github.sources[path]
+
+    matching = await retriever.retrieve(
+        repository_id=repository_id,
+        head_sha=other_sha,
+        changed_files=[diff],
+        fetch_content=fetch,
+        token_budget=1000,
+    )
+    limited = await retriever.retrieve(
+        repository_id=repository_id,
+        head_sha=other_sha,
+        changed_files=[diff],
+        fetch_content=fetch,
+        token_budget=1,
+    )
+    missing = await retriever.retrieve(
+        repository_id=uuid.uuid4(),
+        head_sha=other_sha,
+        changed_files=[diff],
+        fetch_content=fetch,
+        token_budget=1000,
+    )
+
+    assert matching.mode == "context_aware"
+    assert all(item.commit_sha == other_sha for item in matching.items)
+    assert all(item.symbol_id != str(other_symbol_id) for item in matching.items)
+    assert fetch_refs and set(fetch_refs) == {other_sha}
+    assert limited.mode == "diff_only_fallback"
+    assert limited.reason == "no_retrievable_symbols"
+    assert missing.mode == "diff_only_fallback"
+    assert missing.reason == "index_not_requested"
+
+
+@pytest.mark.asyncio
+async def test_context_retrieval_uses_non_mock_embedding_similarity(db):
+    _engine, sessions, repository_id, index_id = db
+    github = FakeGitHub()
+    indexer = RepositoryIndexer(sessions, github, embeddings=CountingEmbeddings())
+    assert (await indexer.index_commit(index_id)).status == "ready"
+    async with sessions.begin() as session:
+        index = await session.get(RepositoryIndex, index_id)
+        index.embedding_model = "semantic-fixture"
+        symbols = list(
+            await session.scalars(
+                select(CodeSymbol).join(CodeFile).where(CodeFile.index_id == index_id)
+            )
+        )
+        for symbol in symbols:
+            symbol.embedding_model = "semantic-fixture"
+        main_symbol = await session.scalar(
+            select(CodeSymbol)
+            .join(CodeFile)
+            .where(CodeFile.index_id == index_id, CodeFile.path == "src/main.js")
+        )
+        anchor = list(main_symbol.embedding)
+        semantic_file = CodeFile(
+            id=uuid.uuid4(),
+            index_id=index_id,
+            path="src/semantic.js",
+            blob_sha="f" * 40,
+            language="javascript",
+            content_hash="f" * 64,
+            size_bytes=37,
+            line_count=1,
+            imports_json="[]",
+            status="indexed",
+            has_syntax_errors=False,
+        )
+        session.add(semantic_file)
+        await session.flush()
+        session.add(
+            CodeSymbol(
+                id=uuid.uuid4(),
+                file_id=semantic_file.id,
+                symbol_key="semantic",
+                kind="function",
+                qualified_name="semantic",
+                start_line=1,
+                end_line=1,
+                content_hash="a" * 64,
+                embedding=anchor,
+                embedding_model="semantic-fixture",
+                embedding_version="fixture-v1",
+                embedding_dimension=8,
+            )
+        )
+    github.sources["src/semantic.js"] = "export function semantic() { return 1; }\n"
+
+    result = await RepositoryContextRetriever(sessions).retrieve(
+        repository_id=repository_id,
+        head_sha=COMMIT,
+        changed_files=[
+            PullRequestFile(
+                path="src/main.js",
+                status="modified",
+                additions=1,
+                deletions=0,
+                patch="@@ -2 +2 @@\n+export function run(input) { return helper(input); }\n",
+            )
+        ],
+        fetch_content=lambda path, _sha: asyncio.sleep(0, result=github.sources.get(path)),
+        token_budget=2000,
+    )
+
+    semantic = [item for item in result.items if item.retrieval_reason == "semantic_similarity"]
+    assert result.mode == "context_aware"
+    assert len(semantic) == 1
+    assert semantic[0].file_path == "src/semantic.js"
+    assert semantic[0].score == 1.0
+
+
+@pytest.mark.asyncio
+async def test_retriever_caps_direct_symbols_edges_and_adjacent_expansion(db, monkeypatch):
+    _engine, sessions, repository_id, index_id = db
+    github = FakeGitHub()
+    indexer = RepositoryIndexer(sessions, github)
+    assert (await indexer.index_commit(index_id)).status == "ready"
+    async with sessions.begin() as session:
+        main_file = await session.scalar(
+            select(CodeFile).where(CodeFile.index_id == index_id, CodeFile.path == "src/main.js")
+        )
+        for number in range(4):
+            session.add(
+                CodeSymbol(
+                    id=uuid.uuid4(),
+                    file_id=main_file.id,
+                    symbol_key=f"extra-direct-{number}",
+                    kind="function",
+                    qualified_name=f"extra_direct_{number}",
+                    start_line=2,
+                    end_line=2,
+                    content_hash=str(number) * 64,
+                )
+            )
+            neighbor_path = f"src/neighbor-{number}.js"
+            neighbor = CodeFile(
+                id=uuid.uuid4(),
+                index_id=index_id,
+                path=neighbor_path,
+                blob_sha=str(number + 1) * 40,
+                language="javascript",
+                content_hash=str(number + 5) * 64,
+                size_bytes=30,
+                line_count=1,
+                imports_json="[]",
+                status="indexed",
+                has_syntax_errors=False,
+            )
+            session.add(neighbor)
+            await session.flush()
+            session.add(
+                CodeSymbol(
+                    id=uuid.uuid4(),
+                    file_id=neighbor.id,
+                    symbol_key=f"neighbor-{number}",
+                    kind="function",
+                    qualified_name=f"neighbor_{number}",
+                    start_line=1,
+                    end_line=1,
+                    content_hash=str(number + 9) * 64,
+                )
+            )
+            session.add(
+                SymbolEdge(
+                    index_id=index_id,
+                    source_file_id=main_file.id,
+                    target_file_id=neighbor.id,
+                    edge_type="imports",
+                    confidence=1.0,
+                )
+            )
+            github.sources[neighbor_path] = f"export function neighbor{number}() {{}}\n"
+
+    monkeypatch.setattr("app.services.context_retriever.MAX_DIRECT_SYMBOLS", 1)
+    monkeypatch.setattr("app.services.context_retriever.MAX_GRAPH_EDGES", 2)
+    monkeypatch.setattr("app.services.context_retriever.MAX_ADJACENT_FILES", 1)
+    monkeypatch.setattr("app.services.context_retriever.MAX_ADJACENT_SYMBOLS", 1)
+    diff = PullRequestFile(
+        path="src/main.js",
+        status="modified",
+        additions=1,
+        deletions=0,
+        patch="@@ -2 +2 @@\n+export function run(input) { return helper(input); }\n",
+    )
+
+    result = await RepositoryContextRetriever(sessions).retrieve(
+        repository_id=repository_id,
+        head_sha=COMMIT,
+        changed_files=[diff],
+        fetch_content=lambda path, _sha: asyncio.sleep(0, result=github.sources.get(path)),
+        token_budget=5000,
+    )
+
+    direct_count = sum(item.retrieval_reason == "changed_symbol" for item in result.items)
+    graph_count = sum(item.retrieval_reason == "imported_file" for item in result.items)
+    assert direct_count <= 1
+    assert graph_count <= 1
+    assert len(result.items) <= 2
+
+
+def test_snippet_reports_the_actual_rendered_line_range(monkeypatch):
+    monkeypatch.setattr("app.services.context_retriever.MAX_CONTEXT_ITEM_CHARS", 40)
+    source = "first line\n" + "x" * 100 + "\nthird line\n"
+
+    body, end_line = _snippet(source, 1, 3)
+    assert end_line == 1
+    assert "3:" not in body
+
+    truncated_body, truncated_end = _snippet(source, 2, 3)
+    assert truncated_end == 2
+    assert len(truncated_body) <= 40
+    assert truncated_body.startswith("2: ")
+    assert "3:" not in truncated_body
 
 
 @pytest.mark.asyncio

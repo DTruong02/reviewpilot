@@ -93,4 +93,15 @@ The parser milestone remains standalone from PR review inputs and dashboard beha
 - [x] Add SQLite/mock tests for idempotence, commit isolation, cache reuse, filters, limits, status, and failure recovery.
 - [ ] Verify pgvector extension migration and GitHub/OpenAI integrations against live services; no external credentials or services were used.
 
-The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. Retrieval and PR review integration remain out of scope until Milestone C.
+The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. PostgreSQL pgvector and live provider/GitHub integrations remain unverified.
+
+## Advanced extension — Milestone C: context retrieval + review integration
+
+- [x] Match added diff lines to symbols from an index with the exact repository ID and head SHA.
+- [x] Retrieve both static importers and imported dependencies; skip semantic-similarity retrieval for local/mock hash vectors.
+- [x] Fetch bounded snippets from the pinned commit, redact obvious credentials, and use a shared approximate token budget.
+- [x] Fall back to diff-only review if the index or retrieval path is unavailable; persist mode and fallback reason.
+- [x] Include validated context citations in findings and expose source-free retrieval provenance in review APIs/dashboard.
+- [ ] Exercise ready-index RAG with PostgreSQL/pgvector and an opted-in live GitHub/OpenAI setup.
+
+Context snippets are held in memory for the review request only. Provenance stores symbol IDs, paths, line ranges, commit SHA, retrieval reason, and score, not snippets. Semantic similarity uses whatever vectors were written during indexing; the default local hash vectors are deterministic placeholders and are not semantically meaningful.

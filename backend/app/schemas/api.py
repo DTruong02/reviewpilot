@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.review import ContextProvenance, EvidenceReference
+
 FeedbackValue = Literal["helpful", "false_positive"]
 ReviewStatusValue = Literal["queued", "running", "completed", "failed", "superseded"]
 SeverityValue = Literal["low", "medium", "high"]
@@ -77,6 +79,7 @@ class FindingRead(BaseModel):
     explanation: str
     suggested_fix: str | None
     feedback: FeedbackValue | None
+    evidence_refs: list[EvidenceReference] | None = None
     created_at: datetime
 
 
@@ -86,6 +89,9 @@ class ReviewRead(ReviewSummary):
     output_tokens: int | None
     duration_ms: int | None
     findings: list[FindingRead]
+    context_mode: Literal["diff_only", "diff_only_fallback", "context_aware"] = "diff_only"
+    context_fallback_reason: str | None = None
+    context_metadata: list[ContextProvenance] | None = None
 
 
 class FeedbackUpdate(BaseModel):
@@ -95,3 +101,26 @@ class FeedbackUpdate(BaseModel):
 class FeedbackRead(BaseModel):
     id: UUID
     feedback: FeedbackValue
+
+
+class IndexRequest(BaseModel):
+    commit_sha: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+
+
+class IndexStatusRead(BaseModel):
+    id: UUID
+    repository_id: UUID
+    commit_sha: str
+    status: str
+    parser_version: str
+    embedding_model: str
+    embedding_version: str
+    embedding_dimension: int
+    embedding_enabled: bool
+    files_discovered: int
+    files_indexed: int
+    files_skipped: int
+    symbols_indexed: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_code: str | None

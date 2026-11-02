@@ -175,6 +175,26 @@ async def test_worker_marks_result_superseded_if_head_changes_during_review(data
 
 
 @pytest.mark.asyncio
+async def test_worker_persists_preflight_stale_commit_as_superseded(database):
+    review_id, _ = await queued_review(database)
+    result = ReviewResult(
+        findings=(),
+        duration_ms=1,
+        context_mode="diff_only_fallback",
+        context_fallback_reason="pull_request_head_changed",
+        stale_commit=True,
+    )
+
+    status = await process_review_once(review_id, database, lambda: FakeReviewEngine(result=result))
+
+    assert status == "superseded"
+    async with database() as session:
+        review = await session.get(Review, review_id)
+        assert review.status == ReviewStatus.superseded
+        assert review.context_fallback_reason == "pull_request_head_changed"
+
+
+@pytest.mark.asyncio
 async def test_transient_review_failure_resets_to_queued_then_terminal_failure_is_saved(database):
     review_id, _ = await queued_review(database)
     transient = FakeReviewEngine(failure=ReviewEngineError("github_unavailable"))
@@ -198,6 +218,24 @@ async def test_transient_review_failure_resets_to_queued_then_terminal_failure_i
         review = await session.get(Review, review_id)
         assert review.status == ReviewStatus.failed
         assert review.error_code == "invalid_review_reference"
+
+
+@pytest.mark.asyncio
+async def test_base_change_is_retryable_and_keeps_same_review_queued(database):
+    review_id, _ = await queued_review(database)
+    engine = FakeReviewEngine(failure=ReviewEngineError("github_pull_request_base_changed"))
+
+    result = await run_review_task_async(
+        str(review_id), sessions=database, engine_factory=lambda: engine
+    )
+
+    assert isinstance(result, RetryRequested)
+    assert result.code == "github_pull_request_base_changed"
+    async with database() as session:
+        review = await session.get(Review, review_id)
+        assert review.status == ReviewStatus.queued
+        assert review.commit_sha == SHA1
+        assert review.error_code == "github_pull_request_base_changed"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -10,12 +11,21 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.schemas.review import LLMFindings, ProviderOutput, PullRequestFile, ReviewContext
+from app.core.config import settings
+from app.schemas.review import (
+    LLMFindings,
+    ProviderOutput,
+    PullRequestFile,
+    RetrievedCodeContext,
+    ReviewContext,
+)
 from app.services.context_builder import ContextBuilder, added_line_numbers
+from app.services.context_retriever import ContextRetrievalResult
 from app.services.github import (
     GitHubAppTokenProvider,
     GitHubClient,
     GitHubClientError,
+    PullRequestRefs,
     _request_with_retries,
     is_supported_source_path,
 )
@@ -176,6 +186,17 @@ async def test_token_provider_caches_token_until_safe_expiry_margin(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_github_client_fetches_and_validates_current_pull_request_head():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/repos/octo/demo/pulls/3")
+        return httpx.Response(200, json={"head": {"sha": "A" * 40}, "base": {"sha": "B" * 40}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        github = GitHubClient(StaticToken(), http)
+        assert await github.fetch_pull_request_head_sha(9, "octo", "demo", 3) == "a" * 40
+
+
+@pytest.mark.asyncio
 async def test_github_file_listing_paginates_and_applies_file_cap():
     calls: list[int] = []
     first_page = [
@@ -297,7 +318,23 @@ class StaticToken:
 
 
 class StaticGitHub:
+    head_sha = SHA
+    base_sha = "c" * 40
+    head_sha_sequence = None
+    refs_sequence = None
+    refs_calls = 0
+    files_calls = 0
+
+    async def fetch_pull_request_refs(self, installation_id, owner, repository, number):
+        self.refs_calls += 1
+        if self.refs_sequence:
+            return self.refs_sequence.pop(0)
+        if self.head_sha_sequence:
+            self.head_sha = self.head_sha_sequence.pop(0)
+        return PullRequestRefs(self.head_sha, self.base_sha)
+
     async def fetch_pull_request_files(self, installation_id, owner, repository, number):
+        self.files_calls += 1
         return [file_diff()]
 
     async def fetch_file_content(self, installation_id, owner, repository, path, ref):
@@ -308,9 +345,11 @@ class SequenceLLM:
     def __init__(self, outputs):
         self.outputs = list(outputs)
         self.calls = 0
+        self.contexts = []
 
     async def review(self, context):
         self.calls += 1
+        self.contexts.append(context)
         output = self.outputs.pop(0)
         if isinstance(output, Exception):
             raise output
@@ -366,6 +405,195 @@ async def test_review_engine_anchors_findings_and_discards_unanchored_and_duplic
     )
     assert len(result.findings) == 1
     assert result.findings[0].line_number == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_review_commit_is_superseded_before_diff_or_model_call():
+    github = StaticGitHub()
+    github.head_sha = "b" * 40
+    llm = SequenceLLM([LLMFindings(findings=[])])
+
+    result = await ReviewEngine(github, llm).review_pull_request(
+        installation_id=1,
+        owner="octo",
+        repository="demo",
+        pull_request_number=3,
+        pull_request_title="title",
+        head_sha=SHA,
+    )
+
+    assert result.stale_commit is True
+    assert result.context_fallback_reason == "pull_request_head_changed"
+    assert github.files_calls == 0
+    assert llm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_review_rechecks_head_after_diff_before_model_call():
+    github = StaticGitHub()
+    github.head_sha_sequence = [SHA, "b" * 40]
+    llm = SequenceLLM([LLMFindings(findings=[])])
+
+    result = await ReviewEngine(github, llm).review_pull_request(
+        installation_id=1,
+        owner="octo",
+        repository="demo",
+        pull_request_number=3,
+        pull_request_title="title",
+        head_sha=SHA,
+    )
+
+    assert github.refs_calls == 2
+    assert github.files_calls == 1
+    assert llm.calls == 0
+    assert result.stale_commit is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change_at_ref", [2, 3], ids=["during-diff-fetch", "during-context-fetch"])
+async def test_review_retries_if_base_changes_during_context_retrieval(change_at_ref):
+    github = StaticGitHub()
+    new_base = "d" * 40
+    github.refs_sequence = [PullRequestRefs(SHA, github.base_sha)] * (change_at_ref - 1) + [
+        PullRequestRefs(SHA, new_base)
+    ]
+    llm = SequenceLLM([LLMFindings(findings=[])])
+
+    class MovingRetriever:
+        calls = 0
+
+        async def retrieve(self, **_kwargs):
+            self.calls += 1
+            return ContextRetrievalResult("diff_only_fallback", "index_not_requested", ())
+
+    retriever = MovingRetriever()
+    engine = ReviewEngine(
+        github,
+        llm,
+        context_retriever=retriever,
+    )
+    with pytest.raises(ReviewEngineError) as error:
+        await engine.review_pull_request(
+            installation_id=1,
+            owner="octo",
+            repository="demo",
+            pull_request_number=3,
+            pull_request_title="title",
+            head_sha=SHA,
+            repository_id=uuid.uuid4(),
+        )
+
+    assert error.value.code == "github_pull_request_base_changed"
+    assert github.refs_calls == change_at_ref
+    assert github.files_calls == 1
+    assert retriever.calls == (1 if change_at_ref == 3 else 0)
+    assert llm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_review_engine_includes_context_and_rejects_unverified_citations():
+    symbol_id = "e55d16b1-6837-465b-a166-6a628ec4a465"
+    item = RetrievedCodeContext(
+        file_path="src/helper.py",
+        symbol_id=symbol_id,
+        start_line=4,
+        end_line=8,
+        commit_sha=SHA,
+        retrieval_reason="imported_file",
+        score=0.75,
+        snippet="4: def helper():\\n5: return True",
+    )
+
+    class Retriever:
+        async def retrieve(self, **_kwargs):
+            return ContextRetrievalResult("context_aware", None, (item,))
+
+    findings = LLMFindings(
+        findings=[
+            {
+                "file_path": "src/example.py",
+                "line_number": 2,
+                "severity": "high",
+                "category": "bug",
+                "title": "Changed behavior is incorrect",
+                "explanation": "The added call depends on this helper.",
+                "evidence_refs": [
+                    {
+                        "symbol_id": symbol_id,
+                        "file_path": "src/helper.py",
+                        "start_line": 4,
+                        "end_line": 8,
+                    }
+                ],
+            },
+            {
+                "file_path": "src/example.py",
+                "line_number": 2,
+                "severity": "high",
+                "category": "bug",
+                "title": "Unsupported citation",
+                "explanation": "This refers to fabricated context.",
+                "evidence_refs": [
+                    {
+                        "symbol_id": "missing-symbol",
+                        "file_path": "secret.py",
+                        "start_line": 1,
+                        "end_line": 1,
+                    }
+                ],
+            },
+        ]
+    )
+    llm = SequenceLLM([findings])
+    result = await ReviewEngine(
+        StaticGitHub(), llm, context_retriever=Retriever()
+    ).review_pull_request(
+        installation_id=1,
+        owner="octo",
+        repository="demo",
+        pull_request_number=3,
+        pull_request_title="title",
+        head_sha=SHA,
+        repository_id=uuid.uuid4(),
+    )
+
+    assert result.context_mode == "context_aware"
+    assert len(result.context_metadata) == 1
+    assert not hasattr(result.context_metadata[0], "snippet")
+    assert llm.contexts[0].retrieved_context[0].symbol_id == symbol_id
+    assert len(result.findings) == 1
+    assert result.findings[0].evidence_refs[0].symbol_id == symbol_id
+
+
+@pytest.mark.asyncio
+async def test_external_context_requires_repository_specific_source_consent(monkeypatch):
+    monkeypatch.setattr(settings, "review_dry_run", False)
+    monkeypatch.setattr(settings, "review_allow_source_upload", True)
+    monkeypatch.setattr(settings, "review_context_repository_allowlist", "octo/another")
+
+    class Retriever:
+        calls = 0
+
+        async def retrieve(self, **_kwargs):
+            self.calls += 1
+            return ContextRetrievalResult("context_aware", None, ())
+
+    retriever = Retriever()
+    result = await ReviewEngine(
+        StaticGitHub(), SequenceLLM([LLMFindings(findings=[])]), context_retriever=retriever
+    ).review_pull_request(
+        installation_id=1,
+        owner="octo",
+        repository="demo",
+        pull_request_number=3,
+        pull_request_title="title",
+        head_sha=SHA,
+        repository_id=uuid.uuid4(),
+    )
+
+    assert retriever.calls == 0
+    assert result.context_mode == "diff_only_fallback"
+    assert result.context_fallback_reason == "context_source_upload_not_allowed"
 
 
 @pytest.mark.asyncio

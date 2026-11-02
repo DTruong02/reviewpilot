@@ -71,3 +71,67 @@ The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and 
 - [ ] Run CI on the hosting provider and verify Compose startup/migrations against PostgreSQL and Redis locally.
 
 No live model benchmark results are claimed. Fixture timing and cost remain unavailable unless supplied as observed prediction data. The reviewer labels are synthetic and should be independently checked before model comparisons.
+
+## Advanced extension — Milestone A: parser audit and Tree-sitter extraction
+
+- [x] Audit current webhook, GitHub retrieval, review engine, worker, database, API, dashboard, and tests before extending them.
+- [x] Add a pure `CodeParser` interface and Tree-sitter extraction for Python, JavaScript/JSX, and TypeScript/TSX.
+- [x] Extract deterministic symbol keys, qualified names, kinds, signatures, docstring summaries, exports, import statements/modules, content hashes, and byte/line ranges.
+- [x] Bound source size and safely report unsupported extensions, binary data, invalid UTF-8, and syntax errors without executing repository content.
+- [x] Add parser fixtures/tests for nested scopes, imports, exports, TypeScript/TSX, malformed syntax, oversized/binary input, and renamed symbols.
+- [x] Install the pinned Tree-sitter dependency set in an isolated Python 3.12 Windows environment and run the complete existing suite.
+- [ ] Verify grammar wheel installation and the complete suite on Linux CI.
+
+The parser remains a standalone service used by commit-scoped indexing. Dynamic imports, aliases, and runtime call relationships are not resolved; Milestone C uses indexed symbols and static file-import edges for review context.
+
+## Advanced extension — Milestone B: commit-scoped indexing
+
+- [x] Add immutable repository/SHA indexes, file/symbol/import-edge storage, versioned embeddings, and a content/model/version cache.
+- [x] Add bounded GitHub tree ingestion, source and secret filters, per-file resumability, deterministic identifiers, and ready/failed status.
+- [x] Add local index submission/status endpoints and periodic queue recovery for queued or stale work.
+- [x] Clean up old unreferenced indexes in bounded daily batches; preserve every index referenced by a stored review.
+- [x] Keep external embedding upload disabled by default; require `REVIEW_ALLOW_SOURCE_UPLOAD=true`, explicit OpenAI mode, API key, and repository allowlisting. Demo mode uses deterministic local hash vectors.
+- [x] Add SQLite/mock tests for idempotence, commit isolation, cache reuse, filters, limits, status, and failure recovery.
+- [ ] Verify pgvector extension migration and GitHub/OpenAI integrations against live services; no external credentials or services were used.
+
+The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. PostgreSQL pgvector and live provider/GitHub integrations remain unverified.
+
+## Advanced extension — Milestone C: context retrieval + review integration
+
+- [x] Match added diff lines to symbols from an index with the exact repository ID and head SHA.
+- [x] Retrieve both static importers and imported dependencies; skip semantic-similarity retrieval for local/mock hash vectors.
+- [x] Fetch bounded snippets from the pinned commit, redact obvious credentials, and use a shared approximate token budget.
+- [x] Fall back to diff-only review if the index or retrieval path is unavailable; persist mode and fallback reason.
+- [x] Include validated context citations in findings and expose source-free retrieval provenance in review APIs/dashboard.
+- [ ] Exercise ready-index RAG with PostgreSQL/pgvector and an opted-in live GitHub/OpenAI setup.
+
+Context snippets are held in memory for the review request only. Provenance stores symbol IDs, paths, line ranges, commit SHA, retrieval reason, and score, not snippets. Semantic similarity is disabled for local/mock hash vectors; it is available only for non-mock embeddings configured with repository source-upload consent.
+
+## Advanced extension — Milestone D: validation planning (no execution)
+
+- [x] Derive bounded, fixed-template validation plans from a finding and its immutable review commit SHA; hash canonical plan data with repository, SHA, finding, and policy version.
+- [x] Store explicit single-operator approval bound to the exact plan hash, repository, and SHA; invalidate approval if the plan content is changed.
+- [x] Require a configured Bearer token of at least 32 UTF-8 bytes and exact repository allowlist on every validation create, approval, run, and detail endpoint.
+- [x] Add a default unavailable-executor result that records `blocked` / `inconclusive`; it does not launch commands, access Docker, enqueue work, or call a model.
+- [x] Add dashboard controls for plan proposal, inspection, approval, and execution-gate status; operator token is kept in browser session storage.
+- [ ] Verify all Milestone D UI flows against a migrated local database and browser session.
+
+Milestone D is planning and approval only. “Run” records that validation is blocked because isolation is unverified; it provides no evidence that a test passes and is not a sandbox. This single-operator token does not provide user accounts, role-based access, CSRF defense, or public deployment readiness; keep the service loopback-only.
+
+## Advanced extension — Milestone E: hardened sandbox boundary
+
+- [x] Add an explicit `SandboxExecutor` interface and default unavailable adapter that returns `blocked` / `inconclusive` without fetching source, starting a process, or queueing a job.
+- [x] Require an approved plan before checking the execution gate; preserve plan hash, repository, and commit SHA binding.
+- [ ] Implement a real executor, immutable snapshot preparation, evidence capture, timeout cleanup, and audit controls. Execution remains disabled because no isolation provider is configured or verified.
+- [ ] Demonstrate a regression, passing test, timeout, denied network attempt, and cleanup/no-mutation on a dedicated isolated executor.
+
+The `SandboxExecutor` is a replaceable contract, not a sandbox. Docker alone is not considered adequate isolation for arbitrary pull request code. No route or worker invokes repository code. Before implementing a real adapter, an external executor must be independently assessed for identity separation, no credentials/network, immutable checkout, quotas, bounded outputs, audit, and cleanup.
+
+## Advanced extension — Milestone F: evaluation and polish
+
+- [x] Add synthetic context-retrieval relevance labels and a scorer for recall@1/3/5 and mean reciprocal rank.
+- [x] Report optional observed indexing/review duration, estimated cost, embedding cache reuse, validation outcome counts, and sandbox startup latency without inventing values.
+- [x] Document fixture commands, observation formats, and the distinction between synthetic scorer checks and measured model/runtime quality.
+- [ ] Record representative observed retrieval/model/sandbox metrics after the corresponding live services and verified executor are available.
+
+The context fixture labels are scorer inputs only. They are not test results from the live retriever. No model quality, retrieval quality, production latency/cost, or sandbox performance benchmark is claimed.

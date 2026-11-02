@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.services.context_builder import ContextBuilder
+from app.services.context_retriever import RepositoryContextRetriever
 from app.services.github import build_github_client
 from app.services.llm import build_llm_client
 from app.services.review_engine import ReviewEngine
@@ -27,11 +28,14 @@ class RetryRequested:
     countdown: int
 
 
-def build_review_engine() -> ReviewEngine:
+def build_review_engine(
+    sessions: async_sessionmaker[AsyncSession] | None = None,
+) -> ReviewEngine:
     return ReviewEngine(
         github=build_github_client(),
         llm=build_llm_client(),
         context_builder=ContextBuilder(),
+        context_retriever=RepositoryContextRetriever(sessions) if sessions else None,
     )
 
 
@@ -51,7 +55,13 @@ async def run_review_task_async(
         sessions = async_sessionmaker(owned_engine, expire_on_commit=False)
     try:
         try:
-            status = await process_review_once(review_uuid, sessions, engine_factory)
+
+            def configured_engine_factory() -> ReviewEngine:
+                if engine_factory is build_review_engine:
+                    return build_review_engine(sessions=sessions)
+                return engine_factory()
+
+            status = await process_review_once(review_uuid, sessions, configured_engine_factory)
             return {"status": status}
         except ProcessingFailure as failure:
             if failure.retryable and retries < settings.review_task_max_retries:

@@ -70,6 +70,10 @@ This MVP has no dashboard authentication. Keep the backend bound to localhost an
 
 ReviewPilot stores repository and pull request metadata, review status and metrics, findings, and feedback in PostgreSQL. It does not persist retrieved source files or diffs. There is no per-repository deletion UI or API yet. For a full local data reset, stop Compose with `docker compose -f infrastructure/docker-compose.yml down -v`; this deletes the PostgreSQL volume and all stored ReviewPilot data.
 
+## Advanced extension: source parsing
+
+The first advanced-extension milestone adds a bounded Tree-sitter parser service for Python, JavaScript/JSX, and TypeScript/TSX. It extracts symbol names, qualified names, signatures, docstrings, imports, exports, source ranges, and content hashes; unsupported, binary, malformed-encoding, or oversized inputs are reported without executing source. This parser is currently a standalone service: it does not fetch or store repositories, alter the review prompt, or affect existing PR reviews. Repository indexing, embeddings, context retrieval, and validation planning are later opt-in milestones.
+
 ## Milestone 2 review engine
 
 The backend includes an injectable GitHub App token provider/client, paginated pull-request file retrieval, a bounded context builder, strict finding validation, and an injectable LLM interface. `REVIEW_DRY_RUN=true` selects a deterministic fake provider and makes no model request. To use OpenAI, configure `OPENAI_API_KEY` and `OPENAI_MODEL`, set `REVIEW_DRY_RUN=false`, and separately set `REVIEW_ALLOW_SOURCE_UPLOAD=true`. This sends bounded pull request source and title text to the configured model provider. The review engine does not write GitHub comments or persist review source.

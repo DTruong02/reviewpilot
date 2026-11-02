@@ -71,3 +71,15 @@ The frontend implementation passed lint, typecheck, three Vitest/RTL tests, and 
 - [ ] Run CI on the hosting provider and verify Compose startup/migrations against PostgreSQL and Redis locally.
 
 No live model benchmark results are claimed. Fixture timing and cost remain unavailable unless supplied as observed prediction data. The reviewer labels are synthetic and should be independently checked before model comparisons.
+
+## Advanced extension — Milestone A: parser audit and Tree-sitter extraction
+
+- [x] Audit current webhook, GitHub retrieval, review engine, worker, database, API, dashboard, and tests before extending them.
+- [x] Add a pure `CodeParser` interface and Tree-sitter extraction for Python, JavaScript/JSX, and TypeScript/TSX.
+- [x] Extract deterministic symbol keys, qualified names, kinds, signatures, docstring summaries, exports, import statements/modules, content hashes, and byte/line ranges.
+- [x] Bound source size and safely report unsupported extensions, binary data, invalid UTF-8, and syntax errors without executing repository content.
+- [x] Add parser fixtures/tests for nested scopes, imports, exports, TypeScript/TSX, malformed syntax, oversized/binary input, and renamed symbols.
+- [x] Install the pinned Tree-sitter dependency set in an isolated Python 3.12 Windows environment and run the complete existing suite.
+- [ ] Verify grammar wheel installation and the complete suite on Linux CI.
+
+This milestone is intentionally standalone. It does not change current review inputs, persistence/API contracts, GitHub retrieval, or dashboard behavior. Dynamic imports, aliases, and runtime call relationships are not resolved. Continue with commit-scoped indexing only after approval.

@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     index_stale_seconds: int = Field(default=1800, ge=60, le=86_400)
     index_retention_days: int = Field(default=90, ge=1, le=3650)
     index_secret_patterns: str = ""
+    validation_api_token: str = ""
+    validation_allowed_repositories: str = ""
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     index_embedding_repository_allowlist: str = ""
     index_embedding_timeout_seconds: float = Field(default=45, ge=1, le=180)
     index_stale_seconds: int = Field(default=1800, ge=60, le=86_400)
+    index_retention_days: int = Field(default=90, ge=1, le=3650)
     index_secret_patterns: str = ""
 
     model_config = SettingsConfigDict(

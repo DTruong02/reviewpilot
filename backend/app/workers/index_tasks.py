@@ -7,11 +7,20 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.models.entities import Repository, RepositoryIndex
+from app.models.entities import (
+    CodeFile,
+    CodeSymbol,
+    EmbeddingCache,
+    PullRequest,
+    Repository,
+    RepositoryIndex,
+    Review,
+    SymbolEdge,
+)
 from app.services.embeddings import (
     DeterministicHashEmbeddingProvider,
     EmbeddingError,
@@ -177,6 +186,66 @@ async def run_index_reconciliation_async(
             await owned_engine.dispose()
 
 
+async def cleanup_old_repository_indexes_async(
+    *,
+    sessions: async_sessionmaker[AsyncSession] | None = None,
+    cutoff: datetime | None = None,
+    batch_size: int = 100,
+) -> int:
+    """Delete expired indexes only when no stored review references their repo and SHA."""
+    owned_engine = None
+    if sessions is None:
+        owned_engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        sessions = async_sessionmaker(owned_engine, expire_on_commit=False)
+    cutoff = cutoff or datetime.now(UTC) - timedelta(days=settings.index_retention_days)
+    batch_size = max(1, min(batch_size, 1000))
+    try:
+        async with sessions.begin() as session:
+            referenced_by_review = exists(
+                select(Review.id)
+                .join(PullRequest, PullRequest.id == Review.pull_request_id)
+                .where(
+                    PullRequest.repository_id == RepositoryIndex.repository_id,
+                    Review.commit_sha == RepositoryIndex.commit_sha,
+                )
+            )
+            indexes = list(
+                await session.scalars(
+                    select(RepositoryIndex)
+                    .where(
+                        RepositoryIndex.created_at < cutoff,
+                        RepositoryIndex.status.in_(("ready", "failed")),
+                        ~referenced_by_review,
+                    )
+                    .order_by(RepositoryIndex.created_at, RepositoryIndex.id)
+                    .limit(batch_size)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            index_ids = [index.id for index in indexes]
+            if not index_ids:
+                return 0
+            file_ids = select(CodeFile.id).where(CodeFile.index_id.in_(index_ids))
+            await session.execute(delete(SymbolEdge).where(SymbolEdge.index_id.in_(index_ids)))
+            await session.execute(delete(CodeSymbol).where(CodeSymbol.file_id.in_(file_ids)))
+            await session.execute(delete(CodeFile).where(CodeFile.index_id.in_(index_ids)))
+            await session.execute(
+                delete(RepositoryIndex).where(RepositoryIndex.id.in_(index_ids))
+            )
+            orphaned_embeddings = ~exists(
+                select(CodeSymbol.id).where(
+                    CodeSymbol.content_hash == EmbeddingCache.content_hash,
+                    CodeSymbol.embedding_model == EmbeddingCache.model_name,
+                    CodeSymbol.embedding_version == EmbeddingCache.model_version,
+                )
+            )
+            await session.execute(delete(EmbeddingCache).where(orphaned_embeddings))
+            return len(index_ids)
+    finally:
+        if owned_engine is not None:
+            await owned_engine.dispose()
+
+
 def index_repository_task_delay(index_id: str) -> None:
     index_repository_task.delay(index_id)
 
@@ -194,3 +263,9 @@ def index_repository_task(index_id: str) -> dict[str, str | int]:
 @celery_app.task(name="reviewpilot.reconcile_repository_indexes")
 def reconcile_repository_indexes_task() -> dict[str, int]:
     return {"dispatched": asyncio.run(run_index_reconciliation_async())}
+
+
+@celery_app.task(name="reviewpilot.cleanup_old_repository_indexes")
+def cleanup_old_repository_indexes_task() -> dict[str, int]:
+    deleted = asyncio.run(cleanup_old_repository_indexes_async())
+    return {"deleted_indexes": deleted}

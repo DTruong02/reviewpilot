@@ -33,5 +33,9 @@ celery_app.conf.update(
             "task": "reviewpilot.reconcile_repository_indexes",
             "schedule": schedule(60.0),
         },
+        "repository-index-retention": {
+            "task": "reviewpilot.cleanup_old_repository_indexes",
+            "schedule": schedule(86_400.0),
+        },
     },
 )

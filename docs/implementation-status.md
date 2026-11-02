@@ -89,6 +89,7 @@ The parser milestone remains standalone from PR review inputs and dashboard beha
 - [x] Add immutable repository/SHA indexes, file/symbol/import-edge storage, versioned embeddings, and a content/model/version cache.
 - [x] Add bounded GitHub tree ingestion, source and secret filters, per-file resumability, deterministic identifiers, and ready/failed status.
 - [x] Add local index submission/status endpoints and periodic queue recovery for queued or stale work.
+- [x] Clean up old unreferenced indexes in bounded daily batches; preserve every index referenced by a stored review.
 - [x] Keep external embedding upload disabled by default; require `REVIEW_ALLOW_SOURCE_UPLOAD=true`, explicit OpenAI mode, API key, and repository allowlisting. Demo mode uses deterministic local hash vectors.
 - [x] Add SQLite/mock tests for idempotence, commit isolation, cache reuse, filters, limits, status, and failure recovery.
 - [ ] Verify pgvector extension migration and GitHub/OpenAI integrations against live services; no external credentials or services were used.

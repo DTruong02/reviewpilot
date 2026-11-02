@@ -19,8 +19,11 @@ from app.models.entities import (
     CodeSymbol,
     EmbeddingCache,
     Installation,
+    PullRequest,
     Repository,
     RepositoryIndex,
+    Review,
+    ReviewStatus,
     SymbolEdge,
 )
 from app.services.embeddings import (
@@ -353,3 +356,70 @@ def test_external_embedding_requires_upload_consent_mode_and_repository_allowlis
         "local-deterministic-mock",
         "sha256-projection-v1",
     )
+
+
+@pytest.mark.asyncio
+async def test_index_retention_removes_only_expired_unreferenced_indexes(db):
+    _engine, sessions, repository_id, referenced_id = db
+    old = datetime.now(UTC) - timedelta(days=100)
+    unreferenced_id = uuid.uuid4()
+    file_id = uuid.uuid4()
+    async with sessions.begin() as session:
+        referenced = await session.get(RepositoryIndex, referenced_id)
+        referenced.status = "ready"
+        referenced.created_at = old
+        pull_request = PullRequest(
+            repository_id=repository_id,
+            github_pr_number=99,
+            title="Historical review",
+            state="closed",
+            head_sha=COMMIT,
+            html_url="https://github.com/octo/index-fixture/pull/99",
+        )
+        session.add(pull_request)
+        await session.flush()
+        session.add(
+            Review(
+                pull_request_id=pull_request.id,
+                commit_sha=COMMIT,
+                status=ReviewStatus.completed,
+            )
+        )
+        session.add(
+            RepositoryIndex(
+                id=unreferenced_id,
+                repository_id=repository_id,
+                commit_sha="b" * 40,
+                status="ready",
+                parser_version="tree-sitter-symbols-v1",
+                embedding_model="mock-embed",
+                embedding_version="fixture-v1",
+                embedding_dimension=8,
+                embedding_enabled=True,
+                created_at=old,
+            )
+        )
+        session.add(
+            CodeFile(
+                id=file_id,
+                index_id=unreferenced_id,
+                path="src/old.py",
+                blob_sha="c" * 40,
+                language="python",
+                content_hash="d" * 64,
+                size_bytes=1,
+                line_count=1,
+                imports_json="[]",
+                status="indexed",
+                has_syntax_errors=False,
+            )
+        )
+
+    deleted = await index_tasks.cleanup_old_repository_indexes_async(
+        sessions=sessions, cutoff=datetime.now(UTC) - timedelta(days=90)
+    )
+    assert deleted == 1
+    async with sessions() as session:
+        assert await session.get(RepositoryIndex, referenced_id) is not None
+        assert await session.get(RepositoryIndex, unreferenced_id) is None
+        assert await session.get(CodeFile, file_id) is None

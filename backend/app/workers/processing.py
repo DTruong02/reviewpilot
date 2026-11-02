@@ -30,6 +30,7 @@ SAFE_ERROR_CODES = frozenset(
         "github_unavailable",
         "github_response_too_large",
         "github_pull_request_response_invalid",
+        "github_pull_request_base_changed",
         "github_diff_response_too_large",
         "github_files_response_invalid",
         "github_permission_denied",
@@ -76,6 +77,7 @@ def is_retryable_code(code: str) -> bool:
         "github_network_error",
         "github_rate_limited",
         "github_unavailable",
+        "github_pull_request_base_changed",
     }:
         return True
     return code.startswith("openai_") and any(

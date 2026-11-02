@@ -221,6 +221,24 @@ async def test_transient_review_failure_resets_to_queued_then_terminal_failure_i
 
 
 @pytest.mark.asyncio
+async def test_base_change_is_retryable_and_keeps_same_review_queued(database):
+    review_id, _ = await queued_review(database)
+    engine = FakeReviewEngine(failure=ReviewEngineError("github_pull_request_base_changed"))
+
+    result = await run_review_task_async(
+        str(review_id), sessions=database, engine_factory=lambda: engine
+    )
+
+    assert isinstance(result, RetryRequested)
+    assert result.code == "github_pull_request_base_changed"
+    async with database() as session:
+        review = await session.get(Review, review_id)
+        assert review.status == ReviewStatus.queued
+        assert review.commit_sha == SHA1
+        assert review.error_code == "github_pull_request_base_changed"
+
+
+@pytest.mark.asyncio
 async def test_worker_persists_only_allowlisted_error_codes(database):
     review_id, _ = await queued_review(database)
     engine = FakeReviewEngine(failure=ReviewEngineError("secret_value_123"))

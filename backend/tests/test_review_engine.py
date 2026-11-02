@@ -25,6 +25,7 @@ from app.services.github import (
     GitHubAppTokenProvider,
     GitHubClient,
     GitHubClientError,
+    PullRequestRefs,
     _request_with_retries,
     is_supported_source_path,
 )
@@ -188,7 +189,7 @@ async def test_token_provider_caches_token_until_safe_expiry_margin(tmp_path):
 async def test_github_client_fetches_and_validates_current_pull_request_head():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/repos/octo/demo/pulls/3")
-        return httpx.Response(200, json={"head": {"sha": "A" * 40}})
+        return httpx.Response(200, json={"head": {"sha": "A" * 40}, "base": {"sha": "B" * 40}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         github = GitHubClient(StaticToken(), http)
@@ -318,15 +319,19 @@ class StaticToken:
 
 class StaticGitHub:
     head_sha = SHA
+    base_sha = "c" * 40
     head_sha_sequence = None
-    head_sha_calls = 0
+    refs_sequence = None
+    refs_calls = 0
     files_calls = 0
 
-    async def fetch_pull_request_head_sha(self, installation_id, owner, repository, number):
-        self.head_sha_calls += 1
+    async def fetch_pull_request_refs(self, installation_id, owner, repository, number):
+        self.refs_calls += 1
+        if self.refs_sequence:
+            return self.refs_sequence.pop(0)
         if self.head_sha_sequence:
-            return self.head_sha_sequence.pop(0)
-        return self.head_sha
+            self.head_sha = self.head_sha_sequence.pop(0)
+        return PullRequestRefs(self.head_sha, self.base_sha)
 
     async def fetch_pull_request_files(self, installation_id, owner, repository, number):
         self.files_calls += 1
@@ -438,10 +443,51 @@ async def test_review_rechecks_head_after_diff_before_model_call():
         head_sha=SHA,
     )
 
-    assert github.head_sha_calls == 2
+    assert github.refs_calls == 2
     assert github.files_calls == 1
     assert llm.calls == 0
     assert result.stale_commit is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change_at_ref", [2, 3], ids=["during-diff-fetch", "during-context-fetch"])
+async def test_review_retries_if_base_changes_during_context_retrieval(change_at_ref):
+    github = StaticGitHub()
+    new_base = "d" * 40
+    github.refs_sequence = [PullRequestRefs(SHA, github.base_sha)] * (change_at_ref - 1) + [
+        PullRequestRefs(SHA, new_base)
+    ]
+    llm = SequenceLLM([LLMFindings(findings=[])])
+
+    class MovingRetriever:
+        calls = 0
+
+        async def retrieve(self, **_kwargs):
+            self.calls += 1
+            return ContextRetrievalResult("diff_only_fallback", "index_not_requested", ())
+
+    retriever = MovingRetriever()
+    engine = ReviewEngine(
+        github,
+        llm,
+        context_retriever=retriever,
+    )
+    with pytest.raises(ReviewEngineError) as error:
+        await engine.review_pull_request(
+            installation_id=1,
+            owner="octo",
+            repository="demo",
+            pull_request_number=3,
+            pull_request_title="title",
+            head_sha=SHA,
+            repository_id=uuid.uuid4(),
+        )
+
+    assert error.value.code == "github_pull_request_base_changed"
+    assert github.refs_calls == change_at_ref
+    assert github.files_calls == 1
+    assert retriever.calls == (1 if change_at_ref == 3 else 0)
+    assert llm.calls == 0
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ from app.schemas.review import (
 )
 from app.services.context_builder import ContextBuilder
 from app.services.context_retriever import ContextRetrievalResult, RepositoryContextRetriever
-from app.services.github import GitHubClient
+from app.services.github import GitHubClient, PullRequestRefs
 from app.services.llm import LLMClient, LLMClientError
 
 
@@ -23,6 +23,15 @@ class ReviewEngineError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def _validate_pr_refs(refs: PullRequestRefs, head_sha: str, base_sha: str | None) -> bool:
+    """Return whether head is current; raise a retryable error for base-only movement."""
+    if refs.head_sha != head_sha.lower():
+        return False
+    if base_sha is not None and refs.base_sha != base_sha:
+        raise ReviewEngineError("github_pull_request_base_changed")
+    return True
 
 
 def _normalized(text: str) -> str:
@@ -90,10 +99,10 @@ class ReviewEngine:
     ) -> ReviewResult:
         started = time.perf_counter()
         try:
-            current_head_sha = await self.github.fetch_pull_request_head_sha(
+            initial_refs = await self.github.fetch_pull_request_refs(
                 installation_id, owner, repository, pull_request_number
             )
-            if current_head_sha != head_sha.lower():
+            if not _validate_pr_refs(initial_refs, head_sha, None):
                 return ReviewResult(
                     findings=(),
                     duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
@@ -104,6 +113,17 @@ class ReviewEngine:
             changed_files = await self.github.fetch_pull_request_files(
                 installation_id, owner, repository, pull_request_number
             )
+            refs_after_files = await self.github.fetch_pull_request_refs(
+                installation_id, owner, repository, pull_request_number
+            )
+            if not _validate_pr_refs(refs_after_files, head_sha, initial_refs.base_sha):
+                return ReviewResult(
+                    findings=(),
+                    duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+                    context_mode="diff_only_fallback",
+                    context_fallback_reason="pull_request_head_changed",
+                    stale_commit=True,
+                )
             context = await self.context_builder.build(
                 repository=f"{owner}/{repository}",
                 pull_request_number=pull_request_number,
@@ -155,21 +175,20 @@ class ReviewEngine:
         )
 
         try:
-            current_head_sha = await self.github.fetch_pull_request_head_sha(
+            refs_after_context = await self.github.fetch_pull_request_refs(
                 installation_id, owner, repository, pull_request_number
             )
+            if not _validate_pr_refs(refs_after_context, head_sha, initial_refs.base_sha):
+                return ReviewResult(
+                    findings=(),
+                    duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+                    context_mode="diff_only_fallback",
+                    context_fallback_reason="pull_request_head_changed",
+                    stale_commit=True,
+                )
         except Exception as exc:
             code = getattr(exc, "code", "github_review_failed")
             raise ReviewEngineError(str(code)) from None
-        if current_head_sha != head_sha.lower():
-            return ReviewResult(
-                findings=(),
-                duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
-                context_mode="diff_only_fallback",
-                context_fallback_reason="pull_request_head_changed",
-                stale_commit=True,
-            )
-
         if not context.files:
             return ReviewResult(
                 findings=(), duration_ms=max(0, int((time.perf_counter() - started) * 1000))

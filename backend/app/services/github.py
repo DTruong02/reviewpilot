@@ -80,6 +80,12 @@ class GitTreeFile:
     size_bytes: int | None
 
 
+@dataclass(frozen=True)
+class PullRequestRefs:
+    head_sha: str
+    base_sha: str
+
+
 def is_safe_index_path(path: str) -> bool:
     """Exclude generated, secret-bearing, and non-source paths before fetching content."""
     if not is_supported_source_path(path):
@@ -308,9 +314,9 @@ class GitHubClient:
         self._max_source_file_bytes = max(1, min(max_source_file_bytes, MAX_SOURCE_FILE_BYTES))
         self._timeout = timeout_seconds
 
-    async def fetch_pull_request_head_sha(
+    async def fetch_pull_request_refs(
         self, installation_id: int, owner: str, repository: str, pull_request_number: int
-    ) -> str:
+    ) -> PullRequestRefs:
         if pull_request_number <= 0 or not owner or not repository:
             raise GitHubClientError("invalid_pull_request_reference")
         token = await self._token_provider.get_token(installation_id)
@@ -329,14 +335,27 @@ class GitHubClient:
         )
         try:
             payload = response.json()
-            sha = payload["head"]["sha"]
-            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+            head_sha = payload["head"]["sha"]
+            base_sha = payload["base"]["sha"]
+            if not all(
+                isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha)
+                for sha in (head_sha, base_sha)
+            ):
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             raise GitHubClientError(
                 "github_pull_request_response_invalid", response.status_code
             ) from None
-        return sha.lower()
+        return PullRequestRefs(head_sha=head_sha.lower(), base_sha=base_sha.lower())
+
+    async def fetch_pull_request_head_sha(
+        self, installation_id: int, owner: str, repository: str, pull_request_number: int
+    ) -> str:
+        """Compatibility helper for callers that only need the PR head."""
+        refs = await self.fetch_pull_request_refs(
+            installation_id, owner, repository, pull_request_number
+        )
+        return refs.head_sha
 
     async def fetch_pull_request_files(
         self, installation_id: int, owner: str, repository: str, pull_request_number: int

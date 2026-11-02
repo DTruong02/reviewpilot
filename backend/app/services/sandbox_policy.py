@@ -12,12 +12,16 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 MAX_EVIDENCE_ITEMS = 20
 MAX_EVIDENCE_ITEM_CHARS = 2_000
 MAX_EVIDENCE_TOTAL_CHARS = 20_000
 MAX_EVIDENCE_LINES = 200
-POLICY_VERSION = 1
+MAX_EVIDENCE_PATH_BYTES = 1_024
+MAX_EVIDENCE_TOTAL_BYTES = 32_000
+MAX_SOURCE_EVIDENCE_READ_BYTES = 4_000_000
+POLICY_VERSION = 2
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
@@ -62,6 +66,11 @@ def validate_relative_repo_path(value: object) -> str:
     parts = value.split("/")
     if any(part in {"", ".", ".."} for part in parts):
         raise SandboxPolicyError("path traversal and empty path components are forbidden")
+    encoded = value.encode("utf-8")
+    if len(encoded) > MAX_EVIDENCE_PATH_BYTES or any(
+        len(part.encode("utf-8")) > 255 for part in parts
+    ):
+        raise SandboxPolicyError("repository-relative path exceeds the size limit")
     return "/".join(parts)
 
 
@@ -105,6 +114,10 @@ class Evidence:
             raise SandboxPolicyError("evidence line range exceeds the limit")
         if not isinstance(excerpt, str) or len(excerpt) > MAX_EVIDENCE_ITEM_CHARS:
             raise SandboxPolicyError("evidence excerpt exceeds the per-item limit")
+        if len(excerpt.encode("utf-8")) > MAX_EVIDENCE_ITEM_CHARS:
+            raise SandboxPolicyError("evidence excerpt exceeds the per-item byte limit")
+        if len(excerpt.splitlines()) != end - start + 1:
+            raise SandboxPolicyError("evidence excerpt line count does not match its range")
         return cls(path, start, end, excerpt)
 
 
@@ -135,8 +148,8 @@ class SandboxPlan:
         if not isinstance(evidence_data, list) or len(evidence_data) > MAX_EVIDENCE_ITEMS:
             raise SandboxPolicyError("plan evidence count exceeds the limit")
         evidence = tuple(Evidence.from_data(item) for item in evidence_data)
-        if sum(len(item.excerpt) for item in evidence) > MAX_EVIDENCE_TOTAL_CHARS:
-            raise SandboxPolicyError("plan evidence exceeds the total character limit")
+        if _evidence_total_bytes(evidence) > MAX_EVIDENCE_TOTAL_BYTES:
+            raise SandboxPolicyError("plan evidence exceeds the total byte limit")
         return cls(repository, head_sha, template, evidence)
 
     def digest(self) -> str:
@@ -240,6 +253,9 @@ class SandboxPolicy:
                 "item_chars": self.max_evidence_item_chars,
                 "total_chars": self.max_evidence_total_chars,
                 "lines": self.max_evidence_lines,
+                "path_bytes": MAX_EVIDENCE_PATH_BYTES,
+                "total_bytes": MAX_EVIDENCE_TOTAL_BYTES,
+                "source_read_bytes": MAX_SOURCE_EVIDENCE_READ_BYTES,
             },
         }
         return hashlib.sha256(
@@ -253,6 +269,9 @@ class SandboxPolicy:
         executor_controls: ExecutorControls | None = None,
         *,
         repository_root: str | Path | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        checkout_verifier: CheckoutVerifier | None = None,
+        controls_verifier: ControlsVerifier | None = None,
     ) -> AuthorizedPlan:
         if not isinstance(plan, SandboxPlan):
             raise SandboxPolicyError("plan must be validated as data before authorization")
@@ -268,22 +287,101 @@ class SandboxPolicy:
         _validate_plan_evidence(plan, self)
         if not isinstance(approval, PlanApproval) or approval.approved is not True:
             raise SandboxPolicyError("explicit approval is required")
-        if (
-            approval.plan_hash != plan.digest()
-            or _canonical_repository(approval.repository) != repository
-            or _canonical_sha(approval.head_sha) != head_sha
-            or approval.policy_hash != self.policy_hash
-        ):
-            raise SandboxPolicyError("approval does not match plan, repository, SHA, and policy")
-        if not isinstance(executor_controls, ExecutorControls) or not executor_controls.verified:
+        if approval_verifier is None or approval_verifier.verify(
+            approval, plan, self.policy_hash
+        ) is not True:
+            raise SandboxPolicyError("trusted, matching, single-use approval is required")
+        if not isinstance(executor_controls, ExecutorControls) or controls_verifier is None:
             raise SandboxPolicyError("verified isolated executor controls are required")
-        if plan.evidence:
-            if repository_root is None:
-                raise SandboxPolicyError("repository root is required to validate evidence paths")
-            for evidence in plan.evidence:
-                if not resolve_repo_path(repository_root, evidence.path).is_file():
-                    raise SandboxPolicyError("evidence path must refer to an existing file")
-        return AuthorizedPlan(repository, head_sha, template.name, template.argv, plan.digest())
+        if controls_verifier.verify(executor_controls) is not True:
+            raise SandboxPolicyError("verified isolated executor controls are required")
+        if repository_root is None or checkout_verifier is None:
+            raise SandboxPolicyError("verified repository checkout is required")
+        try:
+            resolved_root = Path(repository_root).resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SandboxPolicyError("verified repository checkout is required") from exc
+        if not resolved_root.is_dir():
+            raise SandboxPolicyError("verified repository checkout is required")
+        checkout = checkout_verifier.attest_checkout(repository, head_sha, resolved_root)
+        try:
+            attested_root = (
+                checkout.root.resolve(strict=True)
+                if isinstance(checkout, CheckoutAttestation) and isinstance(checkout.root, Path)
+                else None
+            )
+        except (OSError, RuntimeError, ValueError):
+            attested_root = None
+        if not isinstance(checkout, CheckoutAttestation) or not (
+            checkout.repository == repository
+            and checkout.sha == head_sha
+            and attested_root == resolved_root
+            and checkout.immutable is True
+            and isinstance(checkout.snapshot_id, str)
+            and 1 <= len(checkout.snapshot_id.encode("utf-8")) <= 256
+            and isinstance(checkout.tree_digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", checkout.tree_digest)
+        ):
+            raise SandboxPolicyError(
+                "checkout does not match the approved immutable repository and SHA"
+            )
+        source_read_budget = MAX_SOURCE_EVIDENCE_READ_BYTES
+        for evidence in plan.evidence:
+            evidence_path = resolve_repo_path(resolved_root, evidence.path)
+            if not evidence_path.is_file():
+                raise SandboxPolicyError("evidence path must refer to an existing file")
+            actual, bytes_read = _read_evidence_lines(
+                evidence_path,
+                evidence.start_line,
+                evidence.end_line,
+                max_bytes=source_read_budget,
+            )
+            source_read_budget -= bytes_read
+            if actual != evidence.excerpt:
+                raise SandboxPolicyError(
+                    "evidence excerpt does not match the approved source lines"
+                )
+        if approval_verifier.consume(approval, plan, self.policy_hash) is not True:
+            raise SandboxPolicyError("trusted, matching, single-use approval is required")
+        return AuthorizedPlan(
+            repository,
+            head_sha,
+            template.name,
+            template.argv,
+            plan.digest(),
+            str(resolved_root),
+            checkout,
+        )
+
+
+def _read_evidence_lines(
+    path: Path, start_line: int, end_line: int, *, max_bytes: int
+) -> tuple[str, int]:
+    selected: list[str] = []
+    total_bytes = 0
+    try:
+        with path.open("rb") as source:
+            for line_number in range(1, end_line + 1):
+                remaining = max_bytes - total_bytes
+                if remaining <= 0:
+                    raise SandboxPolicyError("evidence source read exceeds the byte limit")
+                raw = source.readline(remaining + 1)
+                if len(raw) > remaining:
+                    raise SandboxPolicyError("evidence source read exceeds the byte limit")
+                if not raw:
+                    raise SandboxPolicyError("evidence line range exceeds the source file")
+                total_bytes += len(raw)
+                if line_number >= start_line:
+                    try:
+                        text = raw.decode("utf-8")
+                    except UnicodeError as exc:
+                        raise SandboxPolicyError(
+                            "evidence source must be readable UTF-8 text"
+                        ) from exc
+                    selected.append(text.removesuffix("\n").removesuffix("\r"))
+    except OSError as exc:
+        raise SandboxPolicyError("evidence source must be readable UTF-8 text") from exc
+    return "\n".join(selected), total_bytes
 
 
 def _validate_plan_evidence(plan: SandboxPlan, policy: SandboxPolicy) -> None:
@@ -311,9 +409,21 @@ def _validate_plan_evidence(plan: SandboxPlan, policy: SandboxPolicy) -> None:
             policy.max_evidence_lines, MAX_EVIDENCE_LINES
         ):
             raise SandboxPolicyError("evidence line range exceeds policy limit")
-        total += len(evidence.excerpt)
-    if total > min(policy.max_evidence_total_chars, MAX_EVIDENCE_TOTAL_CHARS):
+        if len(evidence.excerpt.splitlines()) != evidence.end_line - evidence.start_line + 1:
+            raise SandboxPolicyError("evidence excerpt line count does not match its range")
+        total += len(evidence.excerpt.encode("utf-8")) + len(evidence.path.encode("utf-8"))
+    if total > MAX_EVIDENCE_TOTAL_BYTES:
+        raise SandboxPolicyError("plan evidence exceeds the total byte limit")
+    if sum(len(item.excerpt) for item in plan.evidence) > min(
+        policy.max_evidence_total_chars, MAX_EVIDENCE_TOTAL_CHARS
+    ):
         raise SandboxPolicyError("plan evidence exceeds policy total limit")
+
+
+def _evidence_total_bytes(evidence: tuple[Evidence, ...]) -> int:
+    return sum(
+        len(item.excerpt.encode("utf-8")) + len(item.path.encode("utf-8")) for item in evidence
+    )
 
 
 @dataclass(frozen=True)
@@ -323,6 +433,44 @@ class PlanApproval:
     repository: str
     head_sha: str
     policy_hash: str
+
+
+@dataclass(frozen=True)
+class CheckoutAttestation:
+    """Trusted proof identifying the immutable tree an executor must consume."""
+
+    repository: str
+    sha: str
+    root: Path
+    tree_digest: str
+    snapshot_id: str
+    immutable: bool
+
+
+class ApprovalVerifier(Protocol):
+    """Trusted service that authenticates approvals and atomically prevents replay."""
+
+    def verify(
+        self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str
+    ) -> bool: ...
+
+    def consume(
+        self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str
+    ) -> bool: ...
+
+
+class CheckoutVerifier(Protocol):
+    """Trusted service that returns a sealed snapshot identity for an approved checkout."""
+
+    def attest_checkout(
+        self, repository: str, sha: str, root: Path
+    ) -> CheckoutAttestation | None: ...
+
+
+class ControlsVerifier(Protocol):
+    """Trusted service that measures/attests controls instead of trusting caller fields."""
+
+    def verify(self, controls: ExecutorControls) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -360,3 +508,5 @@ class AuthorizedPlan:
     test_template: str
     argv: tuple[str, ...]
     plan_hash: str
+    repository_root: str | None = None
+    checkout: CheckoutAttestation | None = None

@@ -7,6 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes.indexes import router as indexes_router
 from app.api.routes.read import router as read_router
+from app.api.routes.validation import router as validation_router
 from app.api.routes.webhooks import router as webhook_router
 
 app = FastAPI(title="ReviewPilot API", version="0.1.0")
@@ -55,3 +56,4 @@ async def health() -> dict[str, str]:
 app.include_router(webhook_router)
 app.include_router(read_router)
 app.include_router(indexes_router)
+app.include_router(validation_router)

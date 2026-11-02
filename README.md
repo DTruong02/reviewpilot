@@ -89,6 +89,12 @@ ReviewPilot stores repository and pull request metadata, review status and metri
 
 The advanced extension adds a bounded Tree-sitter parser and commit-scoped repository index for Python, JavaScript/JSX, and TypeScript/TSX. For an indexed PR head SHA, the review can include changed symbols, static import neighbors, and vector-similar symbols from the same repository/commit. Each item is shown with path, line range, commit, retrieval reason, and score; model citations are checked against those items and stored without source snippets. Indexing failure falls back to diff-only analysis. Runtime call relationships and dynamic imports are not resolved; hash mock vectors are not semantic, and semantic quality is unmeasured.
 
+## Advanced extension: validation planning (Milestone D)
+
+Milestone D lets a single local operator propose a bounded validation plan from an existing finding, inspect its fixed runner-template identifier, test input, expected behavior, and expected observation, then explicitly approve that exact plan. The canonical hash binds the plan to the finding, exact repository, immutable review SHA, and policy version. A plan whose contents change loses its approval.
+
+To enable it, set `VALIDATION_API_TOKEN` to a randomly generated secret of at least 32 UTF-8 bytes and `VALIDATION_ALLOWED_REPOSITORIES` to comma-separated exact GitHub `owner/name` values (no wildcard entries). A missing, invalid, or shorter token disables validation endpoints with HTTP 503. Restart the backend. In a finding's validation panel, enter the token and propose a plan. The browser stores it in session storage only. Approval records the operator action. “Record mock simulation” creates a `not_attempted` / `inconclusive` record that says no code was run; it does not invoke a shell, Docker, a worker queue, or an AI model. This is not automated test validation or a sandbox. Milestone E execution is not implemented.
+
 ## Milestone 2 review engine
 
 The backend includes an injectable GitHub App token provider/client, paginated pull-request file retrieval, a bounded context builder, strict finding validation, and an injectable LLM interface. `REVIEW_DRY_RUN=true` selects a deterministic fake provider and makes no model request. To use OpenAI, configure `OPENAI_API_KEY` and `OPENAI_MODEL`, set `REVIEW_DRY_RUN=false`, and separately set `REVIEW_ALLOW_SOURCE_UPLOAD=true`. This sends bounded pull request source and title text to the configured model provider. The review engine does not write GitHub comments or persist review source.

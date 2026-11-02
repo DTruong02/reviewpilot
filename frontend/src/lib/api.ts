@@ -5,16 +5,20 @@ export type ReviewSummary = { id: string; status: string; created_at: string; co
 export type EvidenceReference = { symbol_id: string; file_path: string; start_line: number; end_line: number };
 export type ContextProvenance = { file_path: string; symbol_id: string; start_line: number; end_line: number; commit_sha: string; retrieval_reason: "changed_symbol" | "imported_file" | "importer_file" | "semantic_similarity"; score: number };
 export type Finding = { id: string; severity: "high" | "medium" | "low"; title: string; category: string; explanation: string; suggested_fix?: string | null; evidence_refs?: EvidenceReference[] | null; file_path: string; line_number: number | null; feedback?: "helpful" | "false_positive" | null };
+export type ValidationPlan = { id: string; finding_id: string; repository: string; commit_sha: string; policy_version: string; plan: { runner_template: "pytest_targeted" | "ruff_targeted" | "npm_test_targeted"; expected_behavior: string; test_input: string; expected_observation: string }; plan_hash: string; status: string; approved: boolean };
+export type ValidationRun = { id: string; plan_id: string; status: "not_attempted"; conclusion: "inconclusive"; executor: "mock_no_execution"; observation: string };
 export type Review = ReviewSummary & { pull_request_id: string; findings: Finding[]; input_tokens?: number | null; output_tokens?: number | null; duration_ms?: number | null; context_mode: "diff_only" | "diff_only_fallback" | "context_aware"; context_fallback_reason?: string | null; context_metadata?: ContextProvenance[] | null };
 export class ApiError extends Error { constructor(message: string, public status?: number) { super(message); } }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
-  try { response = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...init?.headers }, cache: "no-store" }); }
+  const token = typeof window === "undefined" ? "" : window.sessionStorage.getItem("reviewpilot.validationToken") || "";
+  try { response = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers }, cache: "no-store" }); }
   catch { throw new ApiError("The ReviewPilot API is unreachable."); }
   if (!response.ok) {
     let message = `Request failed (${response.status}).`;
     try {
       const body: { detail?: unknown } = await response.json();
+      if ("message" in body && typeof body.message === "string") message = body.message;
       if (typeof body.detail === "string") message = body.detail;
       else if (body.detail && typeof body.detail === "object" && "message" in body.detail && typeof body.detail.message === "string") message = body.detail.message;
     } catch { /* use safe status */ }
@@ -23,6 +27,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 export const api = {
+  setValidationToken: (token: string) => { if (typeof window !== "undefined") window.sessionStorage.setItem("reviewpilot.validationToken", token); },
+  clearValidationToken: () => { if (typeof window !== "undefined") window.sessionStorage.removeItem("reviewpilot.validationToken"); },
+  validationPlan: (findingId: string) => request<ValidationPlan>(`/findings/${findingId}/validation-plans`, { method: "POST" }),
+  validationPlanDetail: (planId: string) => request<ValidationPlan>(`/validation-plans/${planId}`),
+  approveValidationPlan: (planId: string) => request<ValidationPlan>(`/validation-plans/${planId}/approve`, { method: "POST" }),
+  simulateValidationPlan: (planId: string) => request<ValidationRun>(`/validation-plans/${planId}/run`, { method: "POST" }),
+  validationRunDetail: (runId: string) => request<ValidationRun>(`/validation-runs/${runId}`),
   repositories: (offset = 0, limit = 12) => request<Page<Repository>>(`/repositories?offset=${offset}&limit=${limit}`),
   pullRequests: (repoId: string, offset = 0, limit = 12) => request<Page<PullRequest>>(`/repositories/${repoId}/pull-requests?offset=${offset}&limit=${limit}`),
   pullRequest: (id: string) => request<PullRequest>(`/pull-requests/${id}`),

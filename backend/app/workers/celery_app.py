@@ -6,7 +6,7 @@ from app.core.config import settings
 celery_app = Celery(
     "reviewpilot",
     broker=settings.redis_url,
-    include=["app.workers.tasks"],
+    include=["app.workers.tasks", "app.workers.index_tasks"],
 )
 celery_app.conf.update(
     accept_content=["json"],
@@ -28,6 +28,10 @@ celery_app.conf.update(
         "review-queue-reconciliation": {
             "task": "reviewpilot.reconcile_queued_reviews",
             "schedule": schedule(60.0),
-        }
+        },
+        "repository-index-reconciliation": {
+            "task": "reviewpilot.reconcile_repository_indexes",
+            "schedule": schedule(60.0),
+        },
     },
 )

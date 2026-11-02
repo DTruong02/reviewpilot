@@ -82,4 +82,15 @@ No live model benchmark results are claimed. Fixture timing and cost remain unav
 - [x] Install the pinned Tree-sitter dependency set in an isolated Python 3.12 Windows environment and run the complete existing suite.
 - [ ] Verify grammar wheel installation and the complete suite on Linux CI.
 
-This milestone is intentionally standalone. It does not change current review inputs, persistence/API contracts, GitHub retrieval, or dashboard behavior. Dynamic imports, aliases, and runtime call relationships are not resolved. Continue with commit-scoped indexing only after approval.
+The parser milestone remains standalone from PR review inputs and dashboard behavior. Dynamic imports, aliases, and runtime call relationships are not resolved. Milestone B adds persisted indexing but still does not feed indexed context into reviews.
+
+## Advanced extension — Milestone B: commit-scoped indexing
+
+- [x] Add immutable repository/SHA indexes, file/symbol/import-edge storage, versioned embeddings, and a content/model/version cache.
+- [x] Add bounded GitHub tree ingestion, source and secret filters, per-file resumability, deterministic identifiers, and ready/failed status.
+- [x] Add local index submission/status endpoints and periodic queue recovery for queued or stale work.
+- [x] Keep external embedding upload disabled by default; require `REVIEW_ALLOW_SOURCE_UPLOAD=true`, explicit OpenAI mode, API key, and repository allowlisting. Demo mode uses deterministic local hash vectors.
+- [x] Add SQLite/mock tests for idempotence, commit isolation, cache reuse, filters, limits, status, and failure recovery.
+- [ ] Verify pgvector extension migration and GitHub/OpenAI integrations against live services; no external credentials or services were used.
+
+The B implementation stores parser metadata and vectors, not full source files or symbol snippets. OpenAI receives only bounded signature/docstring summaries for explicitly allowlisted repositories. Retrieval and PR review integration remain out of scope until Milestone C.

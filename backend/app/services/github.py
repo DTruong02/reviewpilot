@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ API_VERSION = "2026-03-10"
 DEFAULT_TIMEOUT = 20.0
 MAX_SOURCE_FILE_BYTES = 1_000_000
 MAX_DIFF_RESPONSE_BYTES = 5_000_000
+MAX_TREE_RESPONSE_BYTES = 8_000_000
 _BINARY_SUFFIXES = {
     ".7z",
     ".a",
@@ -69,6 +71,30 @@ class GitHubClientError(RuntimeError):
 
 class InstallationTokenProvider(Protocol):
     async def get_token(self, installation_id: int) -> str: ...
+
+
+@dataclass(frozen=True)
+class GitTreeFile:
+    path: str
+    blob_sha: str
+    size_bytes: int | None
+
+
+def is_safe_index_path(path: str) -> bool:
+    """Exclude generated, secret-bearing, and non-source paths before fetching content."""
+    if not is_supported_source_path(path):
+        return False
+    parts = path.replace("\\", "/").lower().split("/")
+    basename = parts[-1]
+    if any(":" in part or "\x00" in part for part in parts) or ".ssh" in parts:
+        return False
+    if basename in {".env", ".npmrc", ".pypirc", "credentials", "secrets.json"}:
+        return False
+    if basename.startswith(".env.") or basename.endswith((".pem", ".key", ".p12", ".pfx")):
+        return False
+    if basename.startswith(("id_rsa", "id_ed25519", "private_key")):
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -382,6 +408,66 @@ class GitHubClient:
             return raw.decode("utf-8")
         except (ValueError, TypeError, UnicodeDecodeError, AttributeError):
             return None
+
+    async def fetch_commit_tree(
+        self,
+        installation_id: int,
+        owner: str,
+        repository: str,
+        commit_sha: str,
+        *,
+        max_entries: int = 100_000,
+    ) -> list[GitTreeFile]:
+        """Fetch a bounded immutable tree inventory; symlinks/submodules are never returned."""
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha) or not owner or not repository:
+            raise GitHubClientError("invalid_commit_reference")
+        token = await self._token_provider.get_token(installation_id)
+        url = (
+            f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(repository, safe='')}"
+            f"/git/trees/{commit_sha.lower()}"
+        )
+        response = await _request_with_retries(
+            self._http,
+            "GET",
+            url,
+            headers=_headers(token),
+            params={"recursive": "1"},
+            timeout=self._timeout,
+            max_response_bytes=MAX_TREE_RESPONSE_BYTES,
+            max_response_error_code="github_tree_response_too_large",
+        )
+        try:
+            body = response.json()
+            entries = body["tree"]
+            if body.get("truncated") is True or not isinstance(entries, list):
+                raise ValueError
+            if len(entries) > max_entries:
+                raise GitHubClientError("index_tree_entry_limit", response.status_code)
+            files: list[GitTreeFile] = []
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("type") != "blob":
+                    continue
+                path = entry.get("path")
+                sha = entry.get("sha")
+                mode = entry.get("mode")
+                size = entry.get("size")
+                if not isinstance(path, str) or not is_safe_index_path(path):
+                    continue
+                if mode not in {"100644", "100755"}:
+                    continue
+                if (
+                    not isinstance(sha, str)
+                    or not re.fullmatch(r"[0-9a-fA-F]{40}", sha)
+                    or not isinstance(size, int)
+                    or size < 0
+                ):
+                    raise ValueError
+                files.append(GitTreeFile(path, sha.lower(), size))
+            return files
+        except GitHubClientError:
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise GitHubClientError("github_tree_response_invalid", response.status_code) from None
 
     async def aclose(self) -> None:
         await self._http.aclose()

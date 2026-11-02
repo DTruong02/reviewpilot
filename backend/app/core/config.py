@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,18 @@ class Settings(BaseSettings):
     review_reenqueue_after_seconds: int = Field(default=300, ge=30, le=86400)
     review_running_stale_seconds: int = Field(default=1800, ge=60, le=86400)
     review_task_max_retries: int = Field(default=3, ge=0, le=10)
+    index_enabled: bool = True
+    index_max_files: int = Field(default=5000, ge=1, le=100_000)
+    index_max_file_bytes: int = Field(default=1_000_000, ge=1, le=1_000_000)
+    index_max_total_bytes: int = Field(default=50_000_000, ge=1_000_000, le=1_000_000_000)
+    index_max_tree_entries: int = Field(default=100_000, ge=100, le=200_000)
+    index_embedding_model: str = "text-embedding-3-small"
+    index_embedding_dimension: int = Field(default=1536, ge=1, le=3072)
+    index_embedding_mode: Literal["disabled", "mock", "openai"] = "mock"
+    index_embedding_repository_allowlist: str = ""
+    index_embedding_timeout_seconds: float = Field(default=45, ge=1, le=180)
+    index_stale_seconds: int = Field(default=1800, ge=60, le=86_400)
+    index_secret_patterns: str = ""
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

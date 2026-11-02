@@ -123,6 +123,7 @@ def test_plan_is_data_only_and_authorization_returns_exact_allowlisted_argv() ->
     assert authorized.head_sha == SHA
     assert authorized.argv == ("python", "-m", "pytest")
     assert authorized.plan_hash == plan.digest()
+    assert authorized.checkout.snapshot_id == "sealed-test"
     assert not hasattr(plan, "command")
     assert DEFAULT_TEST_TEMPLATES
 

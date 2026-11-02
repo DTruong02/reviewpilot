@@ -318,7 +318,8 @@ class SandboxPolicy:
             and attested_root == resolved_root
             and checkout.immutable is True
             and isinstance(checkout.snapshot_id, str)
-            and 1 <= len(checkout.snapshot_id.encode("utf-8")) <= 256
+            and 1 <= len(checkout.snapshot_id) <= 256
+            and checkout.snapshot_id.strip() == checkout.snapshot_id
             and isinstance(checkout.tree_digest, str)
             and re.fullmatch(r"[0-9a-f]{64}", checkout.tree_digest)
         ):
@@ -508,5 +509,5 @@ class AuthorizedPlan:
     test_template: str
     argv: tuple[str, ...]
     plan_hash: str
-    repository_root: str | None = None
-    checkout: CheckoutAttestation | None = None
+    repository_root: str
+    checkout: CheckoutAttestation

@@ -63,7 +63,11 @@ class RunRead(BaseModel):
 
 async def operator_auth(authorization: Annotated[str | None, Header()] = None) -> str:
     configured = settings.validation_api_token
-    if not configured:
+    try:
+        configured_bytes = configured.encode("utf-8")
+    except UnicodeEncodeError:
+        configured_bytes = b""
+    if len(configured_bytes) < 32:
         raise HTTPException(
             status_code=503,
             detail={
@@ -72,7 +76,7 @@ async def operator_auth(authorization: Annotated[str | None, Header()] = None) -
             },
         )
     supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-    if not supplied or not hmac.compare_digest(supplied.encode(), configured.encode()):
+    if not supplied or not hmac.compare_digest(supplied.encode(), configured_bytes):
         raise HTTPException(
             status_code=401,
             detail={"code": "unauthorized", "message": "A valid operator token is required."},

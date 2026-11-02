@@ -23,6 +23,8 @@ from app.models.entities import (
     ValidationRun,
 )
 
+VALID_TOKEN = "v" * 32
+
 
 @pytest.fixture
 async def validation_api(monkeypatch):
@@ -80,7 +82,7 @@ async def validation_api(monkeypatch):
         session.add(finding)
         await session.flush()
         ids = {"repository": repository.id, "finding": finding.id, "review": review.id}
-    monkeypatch.setattr(settings, "validation_api_token", "test-operator-secret")
+    monkeypatch.setattr(settings, "validation_api_token", VALID_TOKEN)
     monkeypatch.setattr(settings, "validation_allowed_repositories", "octo/demo")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client, sessions, ids
@@ -89,7 +91,7 @@ async def validation_api(monkeypatch):
 
 
 def auth():
-    return {"Authorization": "Bearer test-operator-secret"}
+    return {"Authorization": f"Bearer {VALID_TOKEN}"}
 
 
 @pytest.mark.asyncio
@@ -98,7 +100,13 @@ async def test_validation_endpoints_fail_closed_without_auth(validation_api, mon
     monkeypatch.setattr(settings, "validation_api_token", "")
     response = await client.post(f"/api/findings/{ids['finding']}/validation-plans")
     assert response.status_code == 503
-    monkeypatch.setattr(settings, "validation_api_token", "configured-secret")
+    monkeypatch.setattr(settings, "validation_api_token", "w" * 31)
+    weak_config = await client.post(
+        f"/api/findings/{ids['finding']}/validation-plans",
+        headers={"Authorization": f"Bearer {'w' * 31}"},
+    )
+    assert weak_config.status_code == 503
+    monkeypatch.setattr(settings, "validation_api_token", VALID_TOKEN)
     for method, path in [
         ("post", f"/api/findings/{ids['finding']}/validation-plans"),
         ("post", "/api/validation-plans/00000000-0000-0000-0000-000000000000/approve"),

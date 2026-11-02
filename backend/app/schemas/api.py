@@ -95,3 +95,26 @@ class FeedbackUpdate(BaseModel):
 class FeedbackRead(BaseModel):
     id: UUID
     feedback: FeedbackValue
+
+
+class IndexRequest(BaseModel):
+    commit_sha: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+
+
+class IndexStatusRead(BaseModel):
+    id: UUID
+    repository_id: UUID
+    commit_sha: str
+    status: str
+    parser_version: str
+    embedding_model: str
+    embedding_version: str
+    embedding_dimension: int
+    embedding_enabled: bool
+    files_discovered: int
+    files_indexed: int
+    files_skipped: int
+    symbols_indexed: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_code: str | None

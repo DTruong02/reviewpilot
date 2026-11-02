@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.routes.indexes import router as indexes_router
 from app.api.routes.read import router as read_router
 from app.api.routes.webhooks import router as webhook_router
 
@@ -53,3 +54,4 @@ async def health() -> dict[str, str]:
 
 app.include_router(webhook_router)
 app.include_router(read_router)
+app.include_router(indexes_router)

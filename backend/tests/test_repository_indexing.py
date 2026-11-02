@@ -49,14 +49,18 @@ class FakeGitHub:
             for path, source in self.sources.items()
         ]
         self.fetches: list[str] = []
+        self.tree_calls = 0
         self.fail_tree = False
 
-    async def fetch_commit_tree(self, *_args, **_kwargs):
+    async def fetch_commit_tree(self, installation_id, *_args, **_kwargs):
+        assert installation_id == 700
+        self.tree_calls += 1
         if self.fail_tree:
             raise GitHubClientError("github_rate_limited", 403)
         return list(self.tree)
 
-    async def fetch_file_content(self, _installation, _owner, _repo, path, ref):
+    async def fetch_file_content(self, installation_id, _owner, _repo, path, ref):
+        assert installation_id == 700
         assert ref in {COMMIT, "b" * 40}
         self.fetches.append(path)
         return self.sources.get(path)
@@ -127,6 +131,7 @@ async def test_indexes_immutable_commit_resumes_and_caches_embeddings(db):
     assert result.files_skipped == 1
     assert result.symbols_indexed == 2
     assert github.fetches == ["src/main.js", "src/utils.js", "src/secret.py"]
+    assert github.tree_calls == 1
     assert len(embeddings.calls) == 2
     async with sessions() as session:
         paths = list(

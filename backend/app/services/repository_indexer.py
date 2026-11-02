@@ -22,6 +22,7 @@ from app.models.entities import (
     CodeFile,
     CodeSymbol,
     EmbeddingCache,
+    Installation,
     Repository,
     RepositoryIndex,
     SymbolEdge,
@@ -76,7 +77,7 @@ class IndexResult:
 class _IndexClaim:
     index_id: uuid.UUID
     commit_sha: str
-    installation_id: uuid.UUID
+    installation_id: int
     owner: str
     repository: str
 
@@ -204,6 +205,9 @@ class RepositoryIndexer:
             repository = await session.get(Repository, index.repository_id)
             if repository is None:
                 raise IndexingError("index_repository_not_found")
+            installation = await session.get(Installation, repository.installation_id)
+            if installation is None:
+                raise IndexingError("index_installation_not_found")
             index.status = "indexing"
             index.started_at = now
             index.completed_at = None
@@ -219,7 +223,7 @@ class RepositoryIndexer:
             return _IndexClaim(
                 index_id=index.id,
                 commit_sha=index.commit_sha,
-                installation_id=repository.installation_id,
+                installation_id=installation.github_installation_id,
                 owner=repository.owner,
                 repository=repository.name,
             )

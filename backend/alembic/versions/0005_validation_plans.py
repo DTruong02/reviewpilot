@@ -25,6 +25,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["finding_id"], ["findings.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["repository_id"], ["repositories.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("finding_id", "commit_sha", name="uq_validation_plans_finding_commit"),
     )
     op.create_index("ix_validation_plans_finding_id", "validation_plans", ["finding_id"])
     op.create_index("ix_validation_plans_repository_id", "validation_plans", ["repository_id"])

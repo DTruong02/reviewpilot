@@ -17,7 +17,10 @@ export function ValidationPlanner({ findingId }: { findingId: string }) {
     try {
       const result = await action();
       if ("plan_hash" in result) setPlan(result);
-      else setRun(result);
+      else {
+        setRun(result);
+        setPlan(current => current ? { ...current, status: result.status } : current);
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Validation planning request failed.");
     } finally {
@@ -26,9 +29,9 @@ export function ValidationPlanner({ findingId }: { findingId: string }) {
   }
 
   return <details className="validation-planner">
-    <summary>Validation plan <span className="muted">(simulation only)</span></summary>
+    <summary>Validation plan <span className="muted">(execution blocked)</span></summary>
     <div className="validation-content">
-      <p><b>No code is run.</b> This feature stores a bounded plan and records an inconclusive simulation only.</p>
+      <p><b>No code is run.</b> This feature stores a bounded plan. The run request records a blocked, inconclusive result because no verified isolated executor is available.</p>
       <label>Single-operator API token <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} /></label>
       <small>The token is kept in this browser tab session only.</small>
       <button type="button" onClick={() => { api.clearValidationToken(); setToken(""); }}>Clear session token</button>
@@ -37,9 +40,9 @@ export function ValidationPlanner({ findingId }: { findingId: string }) {
         {plan && <>
           <button disabled={busy} onClick={() => void perform(() => api.validationPlanDetail(plan.id))}>Refresh details</button>
           <button disabled={busy || plan.approved} onClick={() => void perform(() => api.approveValidationPlan(plan.id))}>{plan.approved ? "Approved" : "Approve exact plan"}</button>
-          <button disabled={busy || !plan.approved} onClick={() => void perform(() => api.simulateValidationPlan(plan.id))}>Record mock simulation</button>
+          <button disabled={busy || !plan.approved || plan.status === "blocked"} onClick={() => void perform(() => api.checkValidationGate(plan.id))}>{plan.status === "blocked" ? "Execution blocked" : "Check execution gate"}</button>
         </>}
-        {run && <button disabled={busy} onClick={() => void perform(() => api.validationRunDetail(run.id))}>Refresh simulation details</button>}
+        {run && <button disabled={busy} onClick={() => void perform(() => api.validationRunDetail(run.id))}>Refresh blocked result</button>}
       </div>
       {error && <p role="alert" className="validation-error">{error}</p>}
       {plan && <div className="validation-state">
@@ -51,7 +54,7 @@ export function ValidationPlanner({ findingId }: { findingId: string }) {
         <p><b>Expected observation:</b> {plan.plan.expected_observation}</p>
         <p><b>Canonical plan hash:</b> <code>{plan.plan_hash}</code></p>
       </div>}
-      {run && <div className="validation-state" role="status"><b>Simulation:</b> {run.status} / {run.conclusion}. {run.observation}</div>}
+      {run && <div className="validation-state" role="status"><b>Validation:</b> {run.status} / {run.conclusion}. {run.observation}</div>}
     </div>
   </details>;
 }

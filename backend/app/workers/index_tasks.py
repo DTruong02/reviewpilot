@@ -229,9 +229,7 @@ async def cleanup_old_repository_indexes_async(
             await session.execute(delete(SymbolEdge).where(SymbolEdge.index_id.in_(index_ids)))
             await session.execute(delete(CodeSymbol).where(CodeSymbol.file_id.in_(file_ids)))
             await session.execute(delete(CodeFile).where(CodeFile.index_id.in_(index_ids)))
-            await session.execute(
-                delete(RepositoryIndex).where(RepositoryIndex.id.in_(index_ids))
-            )
+            await session.execute(delete(RepositoryIndex).where(RepositoryIndex.id.in_(index_ids)))
             orphaned_embeddings = ~exists(
                 select(CodeSymbol.id).where(
                     CodeSymbol.content_hash == EmbeddingCache.content_hash,

@@ -9,7 +9,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -23,6 +24,7 @@ from app.models.entities import (
     ValidationPlan,
     ValidationRun,
 )
+from app.services.sandbox_executor import SandboxRequest, UnavailableSandboxExecutor
 
 router = APIRouter(prefix="/api", tags=["validation planning"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -200,6 +202,17 @@ async def create_plan(finding_id: UUID, session: SessionDep) -> PlanRead:
                 "message": "Review has no valid immutable commit SHA.",
             },
         )
+    finding_id = finding.id
+    review_sha = review.commit_sha
+    existing = await session.scalar(
+        select(ValidationPlan).where(
+            ValidationPlan.finding_id == finding_id,
+            ValidationPlan.commit_sha == review_sha,
+        )
+    )
+    if existing is not None:
+        existing, existing_repo = await _plan_context(session, existing.id)
+        return await _plan_response(session, existing, existing_repo)
     plan = PlanData(
         runner_template="pytest_targeted",
         expected_behavior=(
@@ -217,14 +230,29 @@ async def create_plan(finding_id: UUID, session: SessionDep) -> PlanRead:
     record = ValidationPlan(
         finding_id=finding.id,
         repository_id=repo.id,
-        commit_sha=review.commit_sha,
+        commit_sha=review_sha,
         policy_version=POLICY_VERSION,
         plan_json=plan,
-        plan_hash=_plan_hash(plan, repo.full_name, review.commit_sha, POLICY_VERSION, finding.id),
+        plan_hash=_plan_hash(plan, repo.full_name, review_sha, POLICY_VERSION, finding_id),
         status="proposed",
     )
     session.add(record)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # The unique finding/SHA constraint makes concurrent proposals
+        # idempotent. Return the winner rather than expose a duplicate error.
+        await session.rollback()
+        existing = await session.scalar(
+            select(ValidationPlan).where(
+                ValidationPlan.finding_id == finding_id,
+                ValidationPlan.commit_sha == review_sha,
+            )
+        )
+        if existing is None:
+            raise
+        existing, existing_repo = await _plan_context(session, existing.id)
+        return await _plan_response(session, existing, existing_repo)
     await session.refresh(record)
     return await _plan_response(session, record, repo.full_name)
 
@@ -244,6 +272,14 @@ async def get_plan(plan_id: UUID, session: SessionDep) -> PlanRead:
 )
 async def approve_plan(plan_id: UUID, session: SessionDep) -> PlanRead:
     plan, full_name = await _plan_context(session, plan_id)
+    if plan.status not in {"proposed", "approved"}:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "validation_plan_closed",
+                "message": "A closed validation plan cannot be approved again.",
+            },
+        )
     approval = await session.scalar(
         select(ValidationApproval).where(ValidationApproval.plan_id == plan.id)
     )
@@ -269,7 +305,15 @@ async def approve_plan(plan_id: UUID, session: SessionDep) -> PlanRead:
     "/validation-plans/{plan_id}/run", response_model=RunRead, dependencies=[Depends(operator_auth)]
 )
 async def simulate_run(plan_id: UUID, session: SessionDep) -> RunRead:
-    plan, _full_name = await _plan_context(session, plan_id)
+    plan, full_name = await _plan_context(session, plan_id)
+    if plan.status != "approved":
+        raise HTTPException(
+            409,
+            detail={
+                "code": "validation_plan_closed",
+                "message": "Only an approved plan can check the execution gate once.",
+            },
+        )
     approval = await session.scalar(
         select(ValidationApproval).where(ValidationApproval.plan_id == plan.id)
     )
@@ -285,15 +329,39 @@ async def simulate_run(plan_id: UUID, session: SessionDep) -> RunRead:
                 "message": "Approve this exact plan before requesting its simulation.",
             },
         )
+    claim = await session.execute(
+        update(ValidationPlan)
+        .where(ValidationPlan.id == plan.id, ValidationPlan.status == "approved")
+        .values(status="gate_checking")
+    )
+    if claim.rowcount != 1:
+        await session.rollback()
+        raise HTTPException(
+            409,
+            detail={
+                "code": "validation_plan_closed",
+                "message": "This plan's execution gate has already been checked.",
+            },
+        )
+    plan.status = "gate_checking"
+    # The only installed adapter fails closed. A future executor must replace
+    # this adapter only after independent isolation verification and policy checks.
+    result = await UnavailableSandboxExecutor().run(
+        SandboxRequest(
+            repository=full_name,
+            commit_sha=plan.commit_sha,
+            plan_hash=plan.plan_hash,
+        )
+    )
     run = ValidationRun(
         plan_id=plan.id,
-        status="not_attempted",
-        conclusion="inconclusive",
-        executor="mock_no_execution",
-        observation="No code was run. No command was queued or started.",
+        status=result.status,
+        conclusion=result.conclusion,
+        executor=result.executor,
+        observation=result.observation,
     )
     session.add(run)
-    plan.status = "simulation_not_attempted"
+    plan.status = "blocked"
     await session.commit()
     await session.refresh(run)
     return RunRead.model_validate(run, from_attributes=True)

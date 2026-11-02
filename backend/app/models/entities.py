@@ -283,6 +283,9 @@ class EmbeddingCache(Base):
 
 class ValidationPlan(Base):
     __tablename__ = "validation_plans"
+    __table_args__ = (
+        UniqueConstraint("finding_id", "commit_sha", name="uq_validation_plans_finding_commit"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     finding_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("findings.id", ondelete="CASCADE"), nullable=False, index=True
@@ -317,6 +320,7 @@ class ValidationApproval(Base):
 
 class ValidationRun(Base):
     __tablename__ = "validation_runs"
+    __table_args__ = (UniqueConstraint("plan_id", name="uq_validation_runs_plan_id"),)
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     plan_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("validation_plans.id", ondelete="CASCADE"), nullable=False, index=True

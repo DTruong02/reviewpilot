@@ -287,9 +287,10 @@ class SandboxPolicy:
         _validate_plan_evidence(plan, self)
         if not isinstance(approval, PlanApproval) or approval.approved is not True:
             raise SandboxPolicyError("explicit approval is required")
-        if approval_verifier is None or approval_verifier.verify(
-            approval, plan, self.policy_hash
-        ) is not True:
+        if (
+            approval_verifier is None
+            or approval_verifier.verify(approval, plan, self.policy_hash) is not True
+        ):
             raise SandboxPolicyError("trusted, matching, single-use approval is required")
         if not isinstance(executor_controls, ExecutorControls) or controls_verifier is None:
             raise SandboxPolicyError("verified isolated executor controls are required")
@@ -451,13 +452,9 @@ class CheckoutAttestation:
 class ApprovalVerifier(Protocol):
     """Trusted service that authenticates approvals and atomically prevents replay."""
 
-    def verify(
-        self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str
-    ) -> bool: ...
+    def verify(self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str) -> bool: ...
 
-    def consume(
-        self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str
-    ) -> bool: ...
+    def consume(self, approval: PlanApproval, plan: SandboxPlan, policy_hash: str) -> bool: ...
 
 
 class CheckoutVerifier(Protocol):

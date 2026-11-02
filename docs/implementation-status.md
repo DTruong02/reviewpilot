@@ -111,9 +111,27 @@ Context snippets are held in memory for the review request only. Provenance stor
 
 - [x] Derive bounded, fixed-template validation plans from a finding and its immutable review commit SHA; hash canonical plan data with repository, SHA, finding, and policy version.
 - [x] Store explicit single-operator approval bound to the exact plan hash, repository, and SHA; invalidate approval if the plan content is changed.
-- [x] Require a configured Bearer token and exact repository allowlist on every validation create, approval, run, and detail endpoint.
-- [x] Add a mock simulation endpoint that always records `not_attempted` / `inconclusive`; it does not launch commands, access Docker, enqueue work, or call a model.
-- [x] Add dashboard controls for plan proposal, inspection, approval, and mock simulation; operator token is kept in browser session storage.
+- [x] Require a configured Bearer token of at least 32 UTF-8 bytes and exact repository allowlist on every validation create, approval, run, and detail endpoint.
+- [x] Add a default unavailable-executor result that records `blocked` / `inconclusive`; it does not launch commands, access Docker, enqueue work, or call a model.
+- [x] Add dashboard controls for plan proposal, inspection, approval, and execution-gate status; operator token is kept in browser session storage.
 - [ ] Verify all Milestone D UI flows against a migrated local database and browser session.
 
-Milestone D is planning and approval only. “Run” records that no validation was attempted; it provides no evidence that a test passes and is not a sandbox. Milestone E execution is not implemented. This single-operator token does not provide user accounts, role-based access, CSRF defense, or public deployment readiness; keep the service loopback-only.
+Milestone D is planning and approval only. “Run” records that validation is blocked because isolation is unverified; it provides no evidence that a test passes and is not a sandbox. This single-operator token does not provide user accounts, role-based access, CSRF defense, or public deployment readiness; keep the service loopback-only.
+
+## Advanced extension — Milestone E: hardened sandbox boundary
+
+- [x] Add an explicit `SandboxExecutor` interface and default unavailable adapter that returns `blocked` / `inconclusive` without fetching source, starting a process, or queueing a job.
+- [x] Require an approved plan before checking the execution gate; preserve plan hash, repository, and commit SHA binding.
+- [ ] Implement a real executor, immutable snapshot preparation, evidence capture, timeout cleanup, and audit controls. Execution remains disabled because no isolation provider is configured or verified.
+- [ ] Demonstrate a regression, passing test, timeout, denied network attempt, and cleanup/no-mutation on a dedicated isolated executor.
+
+The `SandboxExecutor` is a replaceable contract, not a sandbox. Docker alone is not considered adequate isolation for arbitrary pull request code. No route or worker invokes repository code. Before implementing a real adapter, an external executor must be independently assessed for identity separation, no credentials/network, immutable checkout, quotas, bounded outputs, audit, and cleanup.
+
+## Advanced extension — Milestone F: evaluation and polish
+
+- [x] Add synthetic context-retrieval relevance labels and a scorer for recall@1/3/5 and mean reciprocal rank.
+- [x] Report optional observed indexing/review duration, estimated cost, embedding cache reuse, validation outcome counts, and sandbox startup latency without inventing values.
+- [x] Document fixture commands, observation formats, and the distinction between synthetic scorer checks and measured model/runtime quality.
+- [ ] Record representative observed retrieval/model/sandbox metrics after the corresponding live services and verified executor are available.
+
+The context fixture labels are scorer inputs only. They are not test results from the live retriever. No model quality, retrieval quality, production latency/cost, or sandbox performance benchmark is claimed.

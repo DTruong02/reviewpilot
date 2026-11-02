@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic retrieval expectations for evaluator schema checks; not an observed ReviewPilot run.",
+  "queries": [
+    {
+      "query_id": "auth-token-change",
+      "relevant_symbol_ids": ["auth.validate_token", "auth.find_user"]
+    },
+    {
+      "query_id": "cache-invalidation-change",
+      "relevant_symbol_ids": ["cache.invalidate_entry", "cache.write_entry"]
+    },
+    {
+      "query_id": "resource-close-change",
+      "relevant_symbol_ids": ["stream.close", "stream.open_resource"]
+    }
+  ]
+}

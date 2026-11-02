@@ -1,3 +1,4 @@
+import asyncio
 from uuid import UUID
 
 import pytest
@@ -131,10 +132,13 @@ async def test_plan_is_linked_to_finding_repository_and_review_sha(validation_ap
     assert len(body["plan_hash"]) == 64
     assert body["status"] == "proposed"
     assert body["approved"] is False
+    repeated = await client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth())
+    assert repeated.status_code == 200
+    assert repeated.json()["id"] == body["id"]
 
 
 @pytest.mark.asyncio
-async def test_simulation_requires_approval_and_never_runs_or_queues_code(validation_api):
+async def test_run_requires_approval_and_blocks_without_verified_isolation(validation_api):
     client, sessions, ids = validation_api
     created = await client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth())
     plan_id = UUID(created.json()["id"])
@@ -145,13 +149,21 @@ async def test_simulation_requires_approval_and_never_runs_or_queues_code(valida
     assert approved.json()["approved"] is True
     simulated = await client.post(f"/api/validation-plans/{plan_id}/run", headers=auth())
     assert simulated.status_code == 200
-    assert simulated.json()["status"] == "not_attempted"
+    assert simulated.json()["status"] == "blocked"
     assert simulated.json()["conclusion"] == "inconclusive"
-    assert simulated.json()["executor"] == "mock_no_execution"
+    assert simulated.json()["executor"] == "unavailable"
+    assert "isolation is unverified" in simulated.json()["observation"]
     assert "No code was run" in simulated.json()["observation"]
+    assert "no job was queued" in simulated.json()["observation"]
     detail = await client.get(f"/api/validation-runs/{simulated.json()['id']}", headers=auth())
     assert detail.status_code == 200
     assert detail.json() == simulated.json()
+    repeated = await client.post(f"/api/validation-plans/{plan_id}/run", headers=auth())
+    assert repeated.status_code == 409
+    assert repeated.json()["code"] == "validation_plan_closed"
+    reapproval = await client.post(f"/api/validation-plans/{plan_id}/approve", headers=auth())
+    assert reapproval.status_code == 409
+    assert reapproval.json()["code"] == "validation_plan_closed"
     async with sessions() as session:
         assert await session.scalar(
             select(ValidationApproval).where(ValidationApproval.plan_id == plan_id)
@@ -160,7 +172,7 @@ async def test_simulation_requires_approval_and_never_runs_or_queues_code(valida
             await session.scalars(select(ValidationRun).where(ValidationRun.plan_id == plan_id))
         )
         assert len(runs) == 1
-        assert runs[0].executor == "mock_no_execution"
+        assert runs[0].executor == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -197,3 +209,41 @@ async def test_exact_repository_allowlist_is_required(validation_api, monkeypatc
     response = await client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth())
     assert response.status_code == 403
     assert response.json()["code"] == "repository_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_execution_gate_requests_create_only_one_run(validation_api):
+    client, sessions, ids = validation_api
+    created = await client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth())
+    plan_id = UUID(created.json()["id"])
+    approved = await client.post(f"/api/validation-plans/{plan_id}/approve", headers=auth())
+    assert approved.status_code == 200
+
+    first, second = await asyncio.gather(
+        client.post(f"/api/validation-plans/{plan_id}/run", headers=auth()),
+        client.post(f"/api/validation-plans/{plan_id}/run", headers=auth()),
+    )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 409]
+    async with sessions() as session:
+        runs = list(
+            await session.scalars(select(ValidationRun).where(ValidationRun.plan_id == plan_id))
+        )
+        assert len(runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_plan_proposals_return_the_same_plan(validation_api):
+    client, sessions, ids = validation_api
+
+    first, second = await asyncio.gather(
+        client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth()),
+        client.post(f"/api/findings/{ids['finding']}/validation-plans", headers=auth()),
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["id"] == second.json()["id"]
+    async with sessions() as session:
+        plans = list(await session.scalars(select(ValidationPlan)))
+        assert len(plans) == 1

@@ -2,12 +2,15 @@
 
 ## Scope
 
-ReviewPilot currently parses reviewed source as data. There is no sandbox runner,
-test-plan API, subprocess invocation, container integration, or code execution
-path in the application. `backend/app/services/sandbox_policy.py` adds reusable
-validation primitives for a possible later test-plan feature; it does not enable
-execution. Do not connect it to a worker or endpoint until the external isolation
-controls below exist and have been independently verified.
+ReviewPilot parses reviewed source as data. It now has authenticated endpoints
+for proposing, inspecting, approving, and checking a validation plan. The
+execution-gate endpoint calls only `UnavailableSandboxExecutor`, which returns
+`blocked` / `inconclusive` without fetching source, starting a subprocess,
+calling Docker, or queueing a job. There is still no sandbox runner, container
+integration, or code execution path. `backend/app/services/sandbox_policy.py`
+contains reusable validation primitives but is not connected to execution.
+Never replace the disabled adapter with an executing adapter until the external
+isolation controls below exist and have been independently verified.
 
 ## Threat model
 
@@ -70,3 +73,11 @@ expensive validation, then atomically consumes them after the remaining checks
 pass to prevent replay.
 The current policy is not an operating-system sandbox and must not be described
 as one.
+
+The current validation-plan API uses a separate single-operator bearer token
+and a configured exact repository allowlist. This identity is local-demo access
+control, not multi-user authorization. Approval is a database record and does
+not itself attest to checkout integrity or external isolation. Plan creation is
+idempotent per finding and commit. Repeated gate checks and re-approval after
+the first blocked result are rejected; each plan can create at most one run
+record. The API run record is not test evidence.

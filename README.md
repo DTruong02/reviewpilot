@@ -41,7 +41,7 @@ The dashboard displays repository and pull request metadata, stored review findi
 
 ## Quality checks and evaluation
 
-Run the backend suite and formatting checks from `backend` with `python -m pytest`, `ruff check .`, and `ruff format --check .`. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test -- --run`, and `npm run build`. CI runs these checks with fake credentials and no live GitHub/OpenAI calls. The ten synthetic review fixtures can be validated from the repository root with `python scripts/evaluate_fixtures.py`; scoring requires recorded model predictions. See [evaluation/README.md](evaluation/README.md) for the methodology and limits.
+Run the backend suite and formatting checks from `backend` with `python -m pytest`, `ruff check .`, and `ruff format --check .`. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test -- --run`, and `npm run build`. CI runs these checks with fake credentials and no live GitHub/OpenAI calls. The synthetic review and context fixtures can be validated from the repository root with `python scripts/evaluate_fixtures.py` and `python scripts/evaluate_context.py`; scoring requires recorded model/retrieval observations. See [evaluation/README.md](evaluation/README.md) for the methodology and limits.
 
 In separate terminals from `backend`, start the worker and queue reconciler:
 
@@ -89,11 +89,11 @@ ReviewPilot stores repository and pull request metadata, review status and metri
 
 The advanced extension adds a bounded Tree-sitter parser and commit-scoped repository index for Python, JavaScript/JSX, and TypeScript/TSX. For an indexed PR head SHA, the review can include changed symbols, static import neighbors, and vector-similar symbols from the same repository/commit. Each item is shown with path, line range, commit, retrieval reason, and score; model citations are checked against those items and stored without source snippets. Indexing failure falls back to diff-only analysis. Runtime call relationships and dynamic imports are not resolved; hash mock vectors are not semantic, and semantic quality is unmeasured.
 
-## Advanced extension: validation planning (Milestone D)
+## Advanced extension: validation planning and execution gate (Milestones D–E)
 
 Milestone D lets a single local operator propose a bounded validation plan from an existing finding, inspect its fixed runner-template identifier, test input, expected behavior, and expected observation, then explicitly approve that exact plan. The canonical hash binds the plan to the finding, exact repository, immutable review SHA, and policy version. A plan whose contents change loses its approval.
 
-To enable it, set `VALIDATION_API_TOKEN` to a randomly generated secret of at least 32 UTF-8 bytes and `VALIDATION_ALLOWED_REPOSITORIES` to comma-separated exact GitHub `owner/name` values (no wildcard entries). A missing, invalid, or shorter token disables validation endpoints with HTTP 503. Restart the backend. In a finding's validation panel, enter the token and propose a plan. The browser stores it in session storage only. Approval records the operator action. “Record mock simulation” creates a `not_attempted` / `inconclusive` record that says no code was run; it does not invoke a shell, Docker, a worker queue, or an AI model. This is not automated test validation or a sandbox. Milestone E execution is not implemented.
+To enable planning, set `VALIDATION_API_TOKEN` to a randomly generated secret of at least 32 UTF-8 bytes and `VALIDATION_ALLOWED_REPOSITORIES` to comma-separated exact GitHub `owner/name` values (no wildcard entries). A missing, invalid, or shorter token disables validation endpoints with HTTP 503. Restart the backend. In a finding's validation panel, enter the token and propose a plan. The browser stores it in session storage only. Approval records the operator action. “Check execution gate” records a `blocked` / `inconclusive` result because no verified isolated executor is available; no code is run and no job is queued. This is not automated test validation or a sandbox. Milestone E execution remains disabled until a dedicated, independently verified isolation provider exists.
 
 ## Milestone 2 review engine
 
